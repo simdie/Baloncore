@@ -288,8 +288,28 @@ pub fn retest_success_rate_simple(findings: &[FindingRecord]) -> f64 {
     retested as f64 / fixed as f64
 }
 
-pub fn ci_blocked_criticals(scans: &[ScanRecord]) -> usize {
-    scans.iter().map(|s| s.verified_findings).sum()
+/// Count findings that BALONCORE caught at CI time with severity = critical.
+///
+/// "Blocked at CI" means the finding is in a lifecycle state that represents
+/// being caught and not yet fixed/closed: `Verified` (just promoted to a real
+/// finding), `Reported` (handed to the team), or `NeedsMoreEvidence` (open
+/// investigation). Findings already `Fixed`/`Retested`/`Closed`/`Rejected`
+/// are not "blocked" — they've moved past the gate.
+///
+/// Severity is parsed case-insensitively; both "critical" and "Critical" count.
+pub fn ci_blocked_criticals(findings: &[FindingRecord]) -> usize {
+    findings
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.state,
+                FindingState::Verified
+                    | FindingState::Reported
+                    | FindingState::NeedsMoreEvidence
+            )
+        })
+        .filter(|f| f.severity.eq_ignore_ascii_case("critical"))
+        .count()
 }
 
 pub fn scan_volume_over_time(scans: &[ScanRecord], bucket: &str) -> Vec<ScanVolumePoint> {
@@ -417,7 +437,7 @@ pub fn compute_metrics_summary(
     let ttp = time_to_proof(findings);
     let ttf = time_to_fix(findings);
     let rsr = retest_success_rate_simple(findings);
-    let cic = ci_blocked_criticals(scans);
+    let cic = ci_blocked_criticals(findings);
     let svo = scan_volume_over_time(scans, "day");
     let mcpv = model_calls_per_verified(scans, model_calls);
     let tpv = tokens_per_verified(scans, total_tokens);
@@ -870,11 +890,41 @@ mod tests {
         assert_eq!(result, 0);
     }
 
+    fn make_finding_with_severity(id: &str, sev: &str, state: FindingState) -> FindingRecord {
+        let mut f = make_finding(id, state, 100, "BrokenObjectLevelAuthorization");
+        f.severity = sev.to_string();
+        f
+    }
+
     #[test]
-    fn ci_blocked_criticals_counts() {
-        let scans = vec![make_scan("s1", 3, 1), make_scan("s2", 7, 2)];
-        let result = ci_blocked_criticals(&scans);
-        assert_eq!(result, 10);
+    fn ci_blocked_criticals_only_counts_critical_and_blocked_states() {
+        // T3.c: prior implementation summed scans[].verified_findings of ALL
+        // severities. This pins the corrected semantics: severity=critical AND
+        // state in {Verified, Reported, NeedsMoreEvidence}.
+        let findings = vec![
+            make_finding_with_severity("fa", "critical", FindingState::Verified),
+            make_finding_with_severity("fb", "Critical", FindingState::Reported),
+            make_finding_with_severity("fc", "critical", FindingState::Fixed),
+            make_finding_with_severity("fd", "high", FindingState::Verified),
+            make_finding_with_severity("fe", "critical", FindingState::Rejected),
+            make_finding_with_severity("ff", "critical", FindingState::NeedsMoreEvidence),
+        ];
+        // Verified + Reported + NeedsMoreEvidence at critical = 3.
+        assert_eq!(ci_blocked_criticals(&findings), 3);
+    }
+
+    #[test]
+    fn ci_blocked_criticals_does_not_count_total_verified() {
+        // Regression test for the prior wrong semantics: 5 Verified findings,
+        // none critical, must produce 0 (not 5).
+        let findings: Vec<FindingRecord> = (0..5)
+            .map(|i| make_finding_with_severity(&format!("f{i}"), "high", FindingState::Verified))
+            .collect();
+        assert_eq!(
+            ci_blocked_criticals(&findings),
+            0,
+            "ci_blocked_criticals must NOT sum verified_findings — see PROGRESS.md T3.c"
+        );
     }
 
     #[test]
@@ -1182,19 +1232,32 @@ mod p3s1_tests {
     fn rollup_hand_computation_matches() {
         let mut rollup = MetricsRollup::new();
         let scan = make_scan("s1", 5, 3);
-        let findings = vec![
+        // Build findings with explicit severities so the corrected
+        // ci_blocked_criticals semantics (severity=critical, state=blocked)
+        // produce a known value. Two critical+Verified findings, two
+        // high+Verified, one critical+Rejected, one Hypothesis at high.
+        let mut findings = vec![
             make_finding("f1", FindingState::Verified, 100, "BOLA"),
             make_finding("f2", FindingState::Verified, 200, "BOLA"),
             make_finding("f3", FindingState::Verified, 300, "BFLA"),
             make_finding("f4", FindingState::Rejected, 400, "BOLA"),
             make_finding("f5", FindingState::Hypothesis, 500, "BFLA"),
         ];
+        findings[0].severity = "critical".to_string();
+        findings[1].severity = "critical".to_string();
+        findings[2].severity = "high".to_string();
+        findings[3].severity = "critical".to_string(); // Rejected → not blocked
+        findings[4].severity = "high".to_string();
+
         rollup.add_scan(&scan, &findings, 50, 2500);
 
         assert_eq!(rollup.cumulative.total_scans, 1);
         assert_eq!(rollup.cumulative.verified_findings, 3);
         assert_eq!(rollup.cumulative.rejected_hypotheses, 1);
-        assert_eq!(rollup.cumulative.ci_blocked_criticals, 5);
+        // Corrected semantics (T3.c): 2 critical+Verified count; the critical
+        // Rejected one does NOT (state filter), the high+Verified ones do NOT
+        // (severity filter).
+        assert_eq!(rollup.cumulative.ci_blocked_criticals, 2);
         assert!((rollup.cumulative.verified_findings_per_scan - 5.0).abs() < 0.001);
         assert!((rollup.cumulative.model_calls_per_verified - 10.0).abs() < 0.001);
         assert!((rollup.cumulative.tokens_per_verified - 500.0).abs() < 0.001);
@@ -1582,7 +1645,7 @@ mod p3s4_traceability_anti_gaming {
             "retest success rate must match independent recomputation"
         );
 
-        let independent_cic = ci_blocked_criticals(&scans);
+        let independent_cic = ci_blocked_criticals(&findings);
         assert_eq!(
             summary.ci_blocked_criticals, independent_cic,
             "CI blocked criticals must match independent recomputation"

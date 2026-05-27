@@ -421,3 +421,35 @@ PARTIAL adoption**. The cryptographic primitive is implemented and tested
 end-to-end; integration into the bundle-write path and KMS plumbing remain
 NEEDS-HUMAN.
 
+---
+
+## T3.c — fix `ci_blocked_criticals` semantics
+
+**Changed.**
+- `ci_blocked_criticals` signature changed from `(&[ScanRecord]) -> usize` to
+  `(&[FindingRecord]) -> usize`. The new implementation counts findings whose
+  `severity` is "critical" (case-insensitive) AND whose `state` is one of
+  `Verified` / `Reported` / `NeedsMoreEvidence` — i.e. critical findings that
+  were caught at CI and have not yet been Fixed/Closed.
+- `compute_metrics_summary` updated to pass `findings` instead of `scans` to
+  `ci_blocked_criticals`.
+- The existing `rollup_hand_computation_matches` test updated to construct
+  findings with explicit severities; its assertion changed from `5` (the old
+  wrong answer) to `2` (the new correct answer).
+
+**Tests added.**
+- `ci_blocked_criticals_only_counts_critical_and_blocked_states` — pins the
+  semantics with a 6-finding fixture (mixed severities and states). Asserts
+  the count is exactly 3.
+- `ci_blocked_criticals_does_not_count_total_verified` — explicit regression
+  test: 5 Verified findings, none critical, must produce 0 (not 5).
+
+**Mutation check.** Replaced the body with `findings.len()` (the old wrong
+"total verified" semantics) →
+`ci_blocked_criticals_does_not_count_total_verified` went RED.
+Restored → GREEN.
+
+**V0 verdict change.** P3.S0a `ci_blocked_criticals` misleading impl:
+MISLEADING IMPL → **REAL**. The metric name now matches what the function
+counts.
+
