@@ -178,3 +178,51 @@ Restored → GREEN.
 HONEST. The doc now correctly says "do not quote a headline number from
 BALONCORE until T1.b is complete."
 
+---
+
+## T1.a — live-lab adversarial firewall test
+
+**Changed.** New integration test file
+[`crates/baloncore-core/tests/firewall_live_lab.rs`](crates/baloncore-core/tests/firewall_live_lab.rs)
+with two tests:
+
+1. `firewall_rejects_schema_clean_false_bola_against_live_lab` — the missing
+   P1.S5 test. Spins up an in-process HTTP server that 200s the admin bearer
+   token and 403s everything else. Stub `ModelClient` emits a confident,
+   schema-clean false BOLA hypothesis (endpoint set, `evidence_refs` set,
+   `confidence = 0.95`) — i.e. it passes EVERY structural pre-filter.
+   `run_live_agent_pipeline` confirms `hypotheses_ready_for_validation >= 1`
+   and `bridge.eligible_for_validation == true`. The test then uses the real
+   `HttpRequestRunner` to fetch owner/attacker/anonymous from the live
+   in-process lab, builds a `BolaValidationCase` from the real exchanges, and
+   asserts:
+   - `BolaValidator::default().validate(&case)` returns `Rejected`, not
+     `Verified` (panics with `FIREWALL BREACHED` if it ever returns
+     `Verified`).
+   - `AuthorizationMatrixObservation::classify(&case, "admin", "user")`
+     returns `BlockedAsExpected`, not `BrokenObjectLevelAuthorization`.
+
+2. `validator_does_verify_when_lab_is_actually_vulnerable` — positive
+   sanity-check that pins the validator's "Verified" branch. Spawns an
+   open-to-everyone server, has user_a fetch user_b's object (real BOLA), and
+   asserts the validator returns `Verified` and the classifier returns
+   `BrokenObjectLevelAuthorization`. Without this counterpart, the negative
+   test could pass trivially (e.g. if the validator always rejected).
+
+**Mutation check.** Commented out BOTH guards inside
+`BolaValidator::validate`:
+- the `is_success_like(case.attacker_exchange.status)` reject branch
+  (around web_api.rs:1908-1914), and
+- the `if !has_marker && !similar_enough` reject branch (around web_api.rs:1940-1946).
+
+Re-ran `cargo test -p baloncore-core --test firewall_live_lab firewall_rejects_schema_clean_false_bola_against_live_lab`
+→ RED with `FIREWALL BREACHED: BolaValidator promoted a false claim to
+Verified.` Restored from `/tmp/web_api.rs.bak` → GREEN. Verified the first
+mutation alone (only the attacker-status check removed) was NOT enough to go
+red, because the body-similarity guard caught it — so the firewall is in fact
+multi-layered, which is good news; the mutation log records that observation.
+
+**V0 verdict change.** P1.S5 firewall integrity: PARTIAL/FIXTURE → **REAL**.
+The product's central "model proposes, validators prove" claim is now
+exercised end-to-end against live HTTP with a schema-clean adversarial input.
+
