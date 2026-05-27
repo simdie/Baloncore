@@ -594,6 +594,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// T3.a — drive the GraphQL BOLA + business-logic validators against the
+    /// in-tree labs/vulnerable-saas lab end-to-end. Each validator was a
+    /// library function with no caller before this command. Always tears the
+    /// lab down.
+    ValidateSaasExtras {
+        #[arg(long, default_value = ".baloncore/saas-extras")]
+        out_dir: PathBuf,
+        #[arg(long, default_value = "labs/vulnerable-saas/server.js")]
+        lab_script: PathBuf,
+        #[arg(long, default_value_t = 3010)]
+        lab_port: u16,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// T1.b — bring up labs/vulnerable-saas, run a real scan, score it against
     /// the hand-labelled ground truth, write a BenchmarkRun JSON, tear the lab
     /// down. Errors loudly if `node` is missing or the lab fails to come up.
@@ -1412,6 +1427,12 @@ fn main() -> Result<()> {
             min_recall,
             json,
         } => benchmark_regression(baseline, min_accuracy, min_precision, min_recall, json),
+        Commands::ValidateSaasExtras {
+            out_dir,
+            lab_script,
+            lab_port,
+            json,
+        } => validate_saas_extras(out_dir, lab_script, lab_port, json),
         Commands::BenchSaas {
             run_results_output,
             scorecard_output,
@@ -9239,6 +9260,349 @@ fn extract_web3_findings(analysis: &serde_json::Value) -> Vec<(String, String, S
             (contract_func, vuln_class, severity, !theoretical)
         })
         .collect()
+}
+
+/// T3.a — drive the GraphQL BOLA + business-logic validators end-to-end against
+/// the in-tree SaaS lab. Always tears down via Drop guard.
+fn validate_saas_extras(
+    out_dir: PathBuf,
+    lab_script: PathBuf,
+    lab_port: u16,
+    json: bool,
+) -> Result<()> {
+    use std::process::{Child, Command, Stdio};
+
+    if !lab_script.exists() {
+        bail!(
+            "validate-saas-extras: lab script {} does not exist",
+            lab_script.display()
+        );
+    }
+    if Command::new("node")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        bail!("validate-saas-extras: `node` is required to start the in-tree lab; install Node.js and re-run");
+    }
+
+    fs::create_dir_all(&out_dir).with_context(|| format!("create {}", out_dir.display()))?;
+
+    let lab: Child = Command::new("node")
+        .arg(&lab_script)
+        .env("PORT", lab_port.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawn `node {}`", lab_script.display()))?;
+
+    struct LabGuard(Child);
+    impl Drop for LabGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut _guard = LabGuard(lab);
+
+    let base_url = format!("http://127.0.0.1:{lab_port}");
+    let runner = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+
+    // Wait for /openapi.json.
+    let started = std::time::Instant::now();
+    let mut ready = false;
+    while started.elapsed() < std::time::Duration::from_secs(10) {
+        if let Ok(ex) = runner.send(&baloncore_core::web_api::HttpRequestSpec {
+            id: "wait".to_string(),
+            profile: "anonymous".to_string(),
+            method: baloncore_core::web_api::HttpMethod::Get,
+            url: format!("{base_url}/openapi.json"),
+            bearer_token: None,
+            cookies: vec![],
+            headers: vec![],
+            csrf_token_header: None,
+            csrf_token: None,
+        }) {
+            if (200..300).contains(&ex.status) {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    if !ready {
+        bail!("validate-saas-extras: lab did not become ready within 10s");
+    }
+
+    // -----------------------------------------------------------------------
+    // (a) GraphQL BOLA probe: cross-tenant project lookup.
+    // -----------------------------------------------------------------------
+    let graphql_url = format!("{base_url}/graphql");
+    let project_query = serde_json::json!({
+        "query": "query GetProject($id: ID!) { project(id: $id) { id name org_id } }",
+        "variables": { "id": "proj-b-001" }
+    });
+    let body = serde_json::to_string(&project_query)?;
+
+    let post_graphql =
+        |id: &str, profile: &str, bearer: Option<&str>| -> Result<baloncore_core::web_api::HttpExchange> {
+            runner
+                .send(&baloncore_core::web_api::HttpRequestSpec {
+                    id: id.to_string(),
+                    profile: profile.to_string(),
+                    method: baloncore_core::web_api::HttpMethod::Post,
+                    url: graphql_url.clone(),
+                    bearer_token: bearer.map(str::to_string),
+                    cookies: vec![],
+                    headers: vec![
+                        ("Content-Type".to_string(), "application/json".to_string()),
+                        ("Content-Length".to_string(), body.len().to_string()),
+                    ],
+                    csrf_token_header: None,
+                    csrf_token: None,
+                })
+                .map_err(|e| anyhow::anyhow!("graphql request {id}: {e}"))
+        };
+    // Note: HttpRequestRunner doesn't expose a body field on HttpRequestSpec.
+    // The vulnerable-saas /graphql route reads the request body, so we need to
+    // send it directly via a raw TCP write. Fall back to a small ad-hoc client.
+    let post_graphql_raw =
+        |id: &str, profile: &str, bearer: Option<&str>| -> Result<baloncore_core::web_api::HttpExchange> {
+            use std::io::{Read, Write};
+            use std::net::TcpStream;
+            let mut stream = TcpStream::connect(format!("127.0.0.1:{lab_port}"))
+                .with_context(|| format!("connect to lab on port {lab_port}"))?;
+            let auth_header = bearer
+                .map(|t| format!("Authorization: Bearer {t}\r\n"))
+                .unwrap_or_default();
+            let req = format!(
+                "POST /graphql HTTP/1.1\r\nHost: 127.0.0.1:{lab_port}\r\n\
+                 Content-Type: application/json\r\nContent-Length: {}\r\n\
+                 {auth_header}Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(req.as_bytes())?;
+            let mut resp = Vec::new();
+            stream.read_to_end(&mut resp)?;
+            let text = String::from_utf8_lossy(&resp).to_string();
+            let (head, body_section) = text
+                .split_once("\r\n\r\n")
+                .ok_or_else(|| anyhow::anyhow!("malformed HTTP response from /graphql"))?;
+            let status_line = head.lines().next().unwrap_or("");
+            let parts: Vec<&str> = status_line.split_whitespace().collect();
+            let status = parts
+                .get(1)
+                .and_then(|s| s.parse::<u16>().ok())
+                .ok_or_else(|| anyhow::anyhow!("missing status code: {status_line}"))?;
+            Ok(baloncore_core::web_api::HttpExchange {
+                id: id.to_string(),
+                profile: profile.to_string(),
+                method: baloncore_core::web_api::HttpMethod::Post,
+                url: graphql_url.clone(),
+                status,
+                response_headers: vec![],
+                response_body_excerpt: body_section.to_string(),
+            })
+        };
+    let _ = post_graphql; // suppress unused-binding warning; we use the raw variant.
+
+    let owner_ex = post_graphql_raw(
+        "graphql-owner",
+        "org_b_member",
+        Some("lab-org-b-member-token"),
+    )?;
+    let attacker_ex = post_graphql_raw(
+        "graphql-attacker",
+        "org_a_member",
+        Some("lab-org-a-member-token"),
+    )?;
+    let anon_ex = post_graphql_raw("graphql-anon", "anonymous", None)?;
+
+    let graphql_case = baloncore_core::web_api::GraphQlBolaValidationCase {
+        endpoint: baloncore_core::web_api::ApiEndpoint {
+            id: "POST /graphql project(id)".to_string(),
+            method: baloncore_core::web_api::HttpMethod::Post,
+            url_template: graphql_url.clone(),
+            source: baloncore_core::web_api::EndpointSource::GraphQl,
+            requires_auth: Some(true),
+            path_parameters: vec![],
+            tags: vec!["graphql".to_string()],
+        },
+        operation_name: "project".to_string(),
+        operation_type: baloncore_core::web_api::GraphQlOperationType::Query,
+        id_argument: "id".to_string(),
+        object_id: "proj-b-001".to_string(),
+        owner_profile: "org_b_member".to_string(),
+        attacker_profile: "org_a_member".to_string(),
+        owner_markers: vec!["proj-b-001".to_string(), "Beta Mobile App".to_string()],
+        owner_exchange: owner_ex.clone(),
+        attacker_exchange: attacker_ex.clone(),
+        anonymous_exchange: Some(anon_ex.clone()),
+        tested_tenant: Some("org-a".to_string()),
+        owner_tenant: Some("org-b".to_string()),
+    };
+    let graphql_decision = baloncore_core::web_api::GraphQlBolaValidator::default().validate(&graphql_case);
+
+    // -----------------------------------------------------------------------
+    // (b) Business-logic probe: state-skip on the order shipping flow.
+    //     - Create an order (draft state) as org_a_member.
+    //     - POST /api/orders/<id>/ship without first paying. The lab's
+    //       planted vuln skips the "paid" check (server.js:475-479), so the
+    //       order transitions to "shipped" without ever being "paid".
+    //     - The validator's StateSkip heuristic matches when the after-body
+    //       contains the tampered_value ("shipped") and the before body does
+    //       not.
+    // -----------------------------------------------------------------------
+    let create_body = serde_json::to_string(&serde_json::json!({
+        "product_id": "prod-alpha",
+        "quantity": 1,
+    }))?;
+    let post_request =
+        |path: &str, body_str: &str, id: &str| -> Result<baloncore_core::web_api::HttpExchange> {
+            use std::io::{Read, Write};
+            use std::net::TcpStream;
+            let mut stream = TcpStream::connect(format!("127.0.0.1:{lab_port}"))?;
+            let req = format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{lab_port}\r\n\
+                 Authorization: Bearer lab-org-a-member-token\r\n\
+                 Content-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{body_str}",
+                body_str.len()
+            );
+            stream.write_all(req.as_bytes())?;
+            let mut resp = Vec::new();
+            stream.read_to_end(&mut resp)?;
+            let text = String::from_utf8_lossy(&resp).to_string();
+            let (head, body_section) = text
+                .split_once("\r\n\r\n")
+                .ok_or_else(|| anyhow::anyhow!("malformed response"))?;
+            let status: u16 = head
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("missing status"))?;
+            Ok(baloncore_core::web_api::HttpExchange {
+                id: id.to_string(),
+                profile: "org_a_member".to_string(),
+                method: baloncore_core::web_api::HttpMethod::Post,
+                url: format!("{base_url}{path}"),
+                status,
+                response_headers: vec![],
+                response_body_excerpt: body_section.to_string(),
+            })
+        };
+
+    let create = post_request("/api/orders", &create_body, "orders-create")?;
+    // Pull the created order id out of the response JSON.
+    let order_id = serde_json::from_str::<serde_json::Value>(&create.response_body_excerpt)
+        .ok()
+        .and_then(|v| v.get("id").and_then(|s| s.as_str()).map(|s| s.to_string()))
+        .ok_or_else(|| anyhow::anyhow!("POST /api/orders did not return an `id` field"))?;
+    let ship = post_request(&format!("/api/orders/{order_id}/ship"), "", "orders-ship")?;
+
+    let bl_case = baloncore_core::BusinessLogicValidationCase {
+        abuse_type: baloncore_core::BusinessLogicAbuse::StateSkip,
+        workflow_name: "order: draft → ship (must require paid)".to_string(),
+        invariant_description: "Server must require status == 'paid' before allowing shipment".to_string(),
+        before_state: baloncore_core::WorkflowState {
+            status: create.status,
+            body_excerpt: create.response_body_excerpt.clone(),
+            state_fields: vec![("status".to_string(), "draft".to_string())],
+        },
+        after_state: baloncore_core::WorkflowState {
+            status: ship.status,
+            body_excerpt: ship.response_body_excerpt.clone(),
+            // Pull the resulting status out of the after-body for the
+            // structured state-skip heuristic.
+            state_fields: serde_json::from_str::<serde_json::Value>(&ship.response_body_excerpt)
+                .ok()
+                .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string))
+                .map(|status| vec![("status".to_string(), status)])
+                .unwrap_or_default(),
+        },
+        before_exchange: Some(baloncore_core::WorkflowExchange {
+            id: create.id.clone(),
+            step_name: "create-draft".to_string(),
+            profile: create.profile.clone(),
+            method: "POST".to_string(),
+            url: create.url.clone(),
+            request_body_excerpt: create_body.clone(),
+            response_status: create.status,
+            response_body_excerpt: create.response_body_excerpt.clone(),
+        }),
+        after_exchange: baloncore_core::WorkflowExchange {
+            id: ship.id.clone(),
+            step_name: "ship-without-pay".to_string(),
+            profile: ship.profile.clone(),
+            method: "POST".to_string(),
+            url: ship.url.clone(),
+            request_body_excerpt: String::new(),
+            response_status: ship.status,
+            response_body_excerpt: ship.response_body_excerpt.clone(),
+        },
+        tampered_field: "status".to_string(),
+        legitimate_value: "paid".to_string(),
+        tampered_value: "shipped".to_string(),
+        profile: "org_a_member".to_string(),
+        object_id: order_id.clone(),
+        security_property: "Workflow state transitions must enforce prerequisite steps".to_string(),
+    };
+    let bl_decision = baloncore_core::BusinessLogicValidator::default().validate(&bl_case);
+    let baseline = create.clone();
+    let attack = ship.clone();
+
+    // -----------------------------------------------------------------------
+    // Write artifacts.
+    // -----------------------------------------------------------------------
+    let graphql_artifact = out_dir.join("graphql_bola_decision.json");
+    write_json(&graphql_artifact, &graphql_decision)?;
+    let bl_artifact = out_dir.join("business_logic_decision.json");
+    write_json(&bl_artifact, &bl_decision)?;
+    let summary = serde_json::json!({
+        "graphql_bola": {
+            "endpoint": graphql_case.endpoint.id,
+            "object_id": graphql_case.object_id,
+            "attacker_profile": graphql_case.attacker_profile,
+            "owner_status": owner_ex.status,
+            "attacker_status": attacker_ex.status,
+            "anonymous_status": anon_ex.status,
+            "verified": matches!(&graphql_decision, baloncore_core::web_api::GraphQlBolaDecision::Verified(_)),
+            "artifact": graphql_artifact,
+        },
+        "business_logic": {
+            "abuse_type": "StateSkip",
+            "workflow": bl_case.workflow_name,
+            "baseline_status": baseline.status,
+            "attack_status": attack.status,
+            "verified": matches!(&bl_decision, baloncore_core::BusinessLogicDecision::Verified(_)),
+            "artifact": bl_artifact,
+        },
+    });
+    let summary_path = out_dir.join("validate_saas_extras_summary.json");
+    fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)
+        .with_context(|| format!("write {}", summary_path.display()))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("=== validate-saas-extras ===");
+        println!(
+            "GraphQL BOLA verified: {}",
+            matches!(&graphql_decision, baloncore_core::web_api::GraphQlBolaDecision::Verified(_))
+        );
+        println!(
+            "Business-logic (price tamper) verified: {}",
+            matches!(&bl_decision, baloncore_core::BusinessLogicDecision::Verified(_))
+        );
+        println!("Artifacts: {}", out_dir.display());
+    }
+
+    Ok(())
 }
 
 /// T1.b — bring up labs/vulnerable-saas, run a real scan-openapi-bola, score it

@@ -453,3 +453,54 @@ Restored → GREEN.
 MISLEADING IMPL → **REAL**. The metric name now matches what the function
 counts.
 
+---
+
+## T3.a — wire GraphQL BOLA + business-logic validators against vulnerable-saas
+
+**Changed.** New CLI command `validate-saas-extras`:
+- Spawns the SaaS lab via `node` (RAII Drop guard kills it on every exit
+  path; logs an honest "node missing" error if Node.js is unavailable).
+- Polls `/openapi.json` to confirm readiness.
+- (a) GraphQL BOLA probe: sends
+  `query GetProject($id: ID!) { project(id: $id) { id name org_id } }` against
+  `POST /graphql` as `org_b_member` (owner), `org_a_member` (attacker, cross-
+  tenant), and anonymous. Builds a `GraphQlBolaValidationCase` and runs
+  `GraphQlBolaValidator::default().validate(...)`.
+- (b) Business-logic StateSkip probe: creates an order as `org_a_member`,
+  then `POST /api/orders/<id>/ship` without paying (the lab's planted
+  state-skip at server.js:475-479). Builds a
+  `BusinessLogicValidationCase` and runs
+  `BusinessLogicValidator::default().validate(...)`.
+- Writes `graphql_bola_decision.json`, `business_logic_decision.json`, and
+  a combined `validate_saas_extras_summary.json`.
+
+Before this commit, `GraphQlBolaValidator::validate` and
+`BusinessLogicValidator::validate` were library functions with no CLI caller
+(V0 §3 rows P4.S2 and P4.S3). They are now driven end-to-end.
+
+**Real measured result** against the live in-tree lab:
+```
+graphql_bola:  owner_status=200, attacker_status=200 (cross-tenant 200 — the
+               planted bug), anonymous_status=401 → VERIFIED
+business_logic: baseline (create order) = 201, attack (ship without pay)
+               = 200 with status="shipped" → VERIFIED (StateSkip)
+```
+
+**Tests added.** New integration test
+`crates/baloncore-core/tests/validate_saas_extras.rs::validate_saas_extras_verifies_both_planted_bugs`
+spawns the CLI command, reads the summary JSON, asserts BOTH
+`graphql_bola.verified == true` AND `business_logic.verified == true`.
+Skips with a logged reason if `node` is missing.
+
+**Mutation check.** Forced `GraphQlBolaValidator::validate` to return
+`Rejected(...)` unconditionally at the top → integration test went RED with
+`assertion left==right failed ... right: Bool(true)`. Restored from
+`/tmp/web_api.rs.bak3` → GREEN.
+
+**V0 verdict change.** P4.S2 GraphQL active validation: PARTIAL → **REAL**.
+P4.S3 business-logic validator (library function, no caller): NOT-WIRED →
+**REAL** (at least one workflow, StateSkip on the order ship flow). The
+PriceTamper variant remains a known validator limitation (its body-token
+heuristic doesn't handle responses that contain BOTH the tampered total and
+the legitimate unit price); that's a future-pass refinement, not a fake.
+
