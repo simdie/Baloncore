@@ -159,9 +159,9 @@ pub use orchestrator::{
     ToolCallResult,
 };
 pub use platform::{
-    bootstrap_platform_state, compliance_mapping, decrypt_evidence, encrypt_evidence,
+    bootstrap_platform_state, compliance_mapping, deobfuscate_evidence, obfuscate_evidence,
     render_platform_audit_log, render_platform_onboarding, AuditEvent, BillingAccount,
-    ComplianceControl, ComplianceMapping, EncryptionConfig, EvidenceBundleRef, InvestorMetrics,
+    ComplianceControl, ComplianceMapping, EvidenceBundleRef, InvestorMetrics, ObfuscationConfig,
     OnboardingStep, OnboardingTracker, Organization, PlanLimits, PlatformFinding,
     PlatformPermission, PlatformPlan, PlatformRole, PlatformScan, PlatformState, PlatformUser,
     Project, RoleAssignment, UsageMetrics, Workspace,

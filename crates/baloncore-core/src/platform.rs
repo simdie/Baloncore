@@ -96,7 +96,12 @@ pub struct EvidenceBundleRef {
     pub workspace_id: String,
     pub finding_id: String,
     pub path: String,
-    pub encrypted_at_rest: bool,
+    /// Whether the on-disk bundle bytes were transformed by `obfuscate_evidence`.
+    /// **This is XOR-with-constant-key obfuscation, NOT cryptographic encryption.**
+    /// Anyone with the source code can recover plaintext. Do not rely on this for
+    /// confidentiality against any threat model. Real encryption is NEEDS-HUMAN
+    /// (real KMS or env-managed AES-GCM keys). See `docs/VERIFICATION/V0_GROUND_TRUTH.md` §6.3.
+    pub obfuscated_at_rest: bool,
     pub signed: bool,
     pub trusted_signer: bool,
 }
@@ -454,24 +459,47 @@ impl OnboardingTracker {
     }
 }
 
+/// **OBFUSCATION (XOR) PARAMETERS — NOT CRYPTOGRAPHIC.**
+///
+/// The fields below describe `obfuscate_evidence`, which XORs each input byte
+/// with a constant-string-derived key/nonce. This is reversible by anyone with
+/// the source code. Do not treat the `algorithm` field as a security claim.
+///
+/// Real evidence encryption is currently NEEDS-HUMAN: a real KMS provider or
+/// env-managed AES-GCM key must be wired before any production confidentiality
+/// claim can be made.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EncryptionConfig {
+pub struct ObfuscationConfig {
+    /// Human-readable algorithm tag. MUST be the literal string
+    /// `"xor-with-constant-key (NOT CRYPTOGRAPHIC)"` or another non-misleading
+    /// value. Never set to a real cipher name like "AES-256-GCM" unless the
+    /// underlying implementation is actually that cipher.
     pub algorithm: String,
     pub key_id: String,
     pub key_derivation: String,
 }
 
-impl Default for EncryptionConfig {
+impl Default for ObfuscationConfig {
     fn default() -> Self {
         Self {
-            algorithm: "AES-256-GCM".to_string(),
+            algorithm: "xor-with-constant-key (NOT CRYPTOGRAPHIC)".to_string(),
             key_id: "default".to_string(),
-            key_derivation: "aes-256-gcm".to_string(),
+            key_derivation: "constant-string-xor".to_string(),
         }
     }
 }
 
-pub fn encrypt_evidence(data: &[u8], config: &EncryptionConfig) -> Vec<u8> {
+/// **OBFUSCATION, NOT ENCRYPTION.** XORs each input byte with a key/nonce
+/// derived deterministically from a constant string and `config.key_id`.
+/// Reversible by anyone with this source. Provides ZERO confidentiality.
+///
+/// Kept only so on-disk bytes do not display as obvious plaintext during
+/// local-dev demos. The corresponding `deobfuscate_evidence` is the same
+/// function (XOR is involutive).
+///
+/// Real encryption is NEEDS-HUMAN — see `docs/VERIFICATION/V0_GROUND_TRUTH.md`
+/// §6.3 and the corresponding entry in `PROGRESS.md`.
+pub fn obfuscate_evidence(data: &[u8], config: &ObfuscationConfig) -> Vec<u8> {
     let key_material = format!("baloncore-evidence-v1-key-{}", config.key_id);
     let mut key = [0u8; 32];
     let key_bytes = key_material.as_bytes();
@@ -490,8 +518,10 @@ pub fn encrypt_evidence(data: &[u8], config: &EncryptionConfig) -> Vec<u8> {
         .collect()
 }
 
-pub fn decrypt_evidence(encrypted: &[u8], config: &EncryptionConfig) -> Vec<u8> {
-    encrypt_evidence(encrypted, config)
+/// Inverse of `obfuscate_evidence`. Provides ZERO confidentiality — see that
+/// function's doc comment.
+pub fn deobfuscate_evidence(obfuscated: &[u8], config: &ObfuscationConfig) -> Vec<u8> {
+    obfuscate_evidence(obfuscated, config)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -916,7 +946,7 @@ mod tests {
             workspace_id,
             finding_id: "finding-1".to_string(),
             path: ".baloncore/evidence/bundle".to_string(),
-            encrypted_at_rest: true,
+            obfuscated_at_rest: true,
             signed: true,
             trusted_signer: true,
         });
@@ -954,7 +984,7 @@ mod tests {
             workspace_id: "ws-prod".to_string(),
             finding_id: "finding-1".to_string(),
             path: ".baloncore/evidence/prod".to_string(),
-            encrypted_at_rest: true,
+            obfuscated_at_rest: true,
             signed: true,
             trusted_signer: true,
         });
@@ -995,5 +1025,53 @@ mod tests {
         assert_eq!(metrics.verified_findings, 1);
         assert_eq!(metrics.average_time_to_proof_seconds, Some(30.0));
         assert_eq!(metrics.retest_success_rate, Some(1.0));
+    }
+
+    // --- T0.c regression test --------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §6.3 flagged that `EncryptionConfig.algorithm = "AES-256-GCM"`
+    // was decorative on top of an XOR obfuscator. This guard prevents the misleading
+    // label from being reintroduced.
+    #[test]
+    fn obfuscation_config_default_does_not_claim_a_real_cipher() {
+        let cfg = ObfuscationConfig::default();
+        let banned = [
+            "AES", "aes", "GCM", "gcm", "CHACHA", "ChaCha", "ChaCha20", "chacha",
+            "RSA", "rsa", "Curve25519", "curve25519",
+        ];
+        for b in banned {
+            assert!(
+                !cfg.algorithm.contains(b),
+                "ObfuscationConfig.default().algorithm must not contain real cipher \
+                 names; obfuscate_evidence is XOR-with-constant-key and provides ZERO \
+                 confidentiality. Got: `{}` (banned substring `{}`)",
+                cfg.algorithm,
+                b
+            );
+        }
+        assert!(
+            cfg.algorithm.contains("NOT CRYPTOGRAPHIC")
+                || cfg.algorithm.contains("not cryptographic"),
+            "ObfuscationConfig.default().algorithm must spell out it is not cryptographic, got: `{}`",
+            cfg.algorithm
+        );
+    }
+
+    #[test]
+    fn obfuscate_evidence_is_only_obfuscation_not_secure_encryption() {
+        // Sanity contract: the function is self-inverse and the output bytes are
+        // recovered without a secret — pinning that we never accidentally treat it
+        // as real encryption.
+        let cfg = ObfuscationConfig::default();
+        let plaintext = b"secret bearer token=sk-abc123";
+        let obf = obfuscate_evidence(plaintext, &cfg);
+        let recovered = deobfuscate_evidence(&obf, &cfg);
+        assert_eq!(
+            recovered.as_slice(),
+            plaintext,
+            "deobfuscate_evidence must invert obfuscate_evidence (XOR is involutive)"
+        );
+        // The mere fact that the same default config recovers plaintext proves
+        // there is no secret key — anyone with the source can decrypt.
     }
 }

@@ -61,3 +61,43 @@ removed `run_ground_truth_baseline` function is the mutation in reverse).
 **V0 verdict change.** P2.S2 silent-ground-truth fallback in `evaluate-benchmark`:
 FAKE → HONEST.
 
+---
+
+## T0.c — strip the AES-256-GCM lie; rename to `obfuscate_evidence`
+
+**Changed.**
+- `EncryptionConfig` → `ObfuscationConfig`. Default `.algorithm` is now the
+  string `"xor-with-constant-key (NOT CRYPTOGRAPHIC)"` (was `"AES-256-GCM"`).
+- `encrypt_evidence` → `obfuscate_evidence`. `decrypt_evidence` →
+  `deobfuscate_evidence`. Long doc-warnings inline that these provide ZERO
+  confidentiality.
+- `EvidenceBundleRef.encrypted_at_rest` → `EvidenceBundleRef.obfuscated_at_rest`
+  with a doc-comment that says so.
+- `diligence.rs:424` / `diligence.rs:1145` no longer claim AES-256-GCM. The
+  questionnaire answer now reads "No. Bundles are currently transformed by an
+  XOR-with-constant-key obfuscator … Real encryption (KMS-managed AES-GCM or
+  equivalent) is on the roadmap but not implemented; do not claim encryption at
+  rest until it is wired."
+- `lib.rs` re-exports renamed accordingly.
+
+**Tests added** (`crates/baloncore-core/src/platform.rs::tests`):
+- `obfuscation_config_default_does_not_claim_a_real_cipher` — guards against
+  any AES/GCM/ChaCha/RSA/Curve25519 substring sneaking back into the default
+  algorithm label; also asserts the string spells out "NOT CRYPTOGRAPHIC".
+- `obfuscate_evidence_is_only_obfuscation_not_secure_encryption` — proves the
+  function is self-inverse from the default config (i.e. there is no secret
+  material, anyone with source can recover plaintext).
+
+**Mutation check.** Changed the default algorithm string back to `"AES-256-GCM"`
+→ RED (`obfuscation_config_default_does_not_claim_a_real_cipher ... FAILED`,
+banned substring `AES`). Restored → GREEN.
+
+**V0 verdict change.** P5.S2 evidence encryption: FAKE → **HONEST (labelled as
+NEEDS-HUMAN)**. The underlying function is unchanged (still XOR), but every
+caller, doc string, and self-reported posture answer now states plainly that it
+is not encryption.
+
+Real `aes-gcm` integration with KMS-managed keys remains **NEEDS-HUMAN**: needs
+either a KMS endpoint + credentials, or a documented env-var convention for a
+master key, plus T2.b approval to add `aes-gcm` to `Cargo.toml`.
+

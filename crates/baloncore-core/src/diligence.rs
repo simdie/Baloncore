@@ -420,14 +420,10 @@ fn data_protection_section(posture: &SecurityPosture) -> QuestionnaireSection {
             QuestionnaireAnswer {
                 id: "dp-2".to_string(),
                 question: "Is evidence encrypted at rest?".to_string(),
-                answer: if posture.components.get("evidence_integrity").is_some_and(|s| *s > 0.7) {
-                    "Yes. Evidence is encrypted at rest using AES-256-GCM.".to_string()
-                } else {
-                    "Evidence encryption is available and being rolled out.".to_string()
-                },
-                confidence: "medium".to_string(),
-                evidence: "encryption configuration in platform state".to_string(),
-                source: "baloncore-platform-encryption".to_string(),
+                answer: "No. Bundles are currently transformed by an XOR-with-constant-key obfuscator (`obfuscate_evidence`) which is NOT cryptographic and provides ZERO confidentiality. Real encryption (KMS-managed AES-GCM or equivalent) is on the roadmap but not implemented; do not claim encryption at rest until it is wired.".to_string(),
+                confidence: "high".to_string(),
+                evidence: "platform::obfuscate_evidence (XOR, not encryption)".to_string(),
+                source: "baloncore-platform-obfuscation".to_string(),
                 is_auto_answered: true,
                 is_evidence_backed: false,
             },
@@ -1146,10 +1142,10 @@ fn build_diligence_recommendations(
             category: "evidence".to_string(),
             priority: "high".to_string(),
             title: "Enable evidence signing and encryption".to_string(),
-            description: "Evidence integrity can be strengthened by enabling Ed25519 signing and AES-256-GCM encryption."
+            description: "Evidence integrity can be strengthened by enabling Ed25519 signing. Real evidence-at-rest encryption is NOT YET IMPLEMENTED — the current `obfuscate_evidence` is XOR with a constant-string key and provides ZERO confidentiality. Wiring a real KMS-managed AES-GCM provider is a prerequisite for enterprise security reviews."
                 .to_string(),
             impact: "Critical for passing enterprise security reviews and compliance audits.".to_string(),
-            effort: "Low — configuration change. Infrastructure is already built.".to_string(),
+            effort: "Ed25519 signing: low (built). Real AES-GCM with KMS: needs implementation.".to_string(),
         });
     }
 
