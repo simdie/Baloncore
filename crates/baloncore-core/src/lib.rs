@@ -4,6 +4,7 @@ pub mod agents;
 pub mod attack_graph;
 pub mod bench_saas;
 pub mod business_logic;
+pub mod encryption;
 pub mod ci;
 pub mod ci_analytics;
 pub mod ci_pipeline;
@@ -51,6 +52,9 @@ pub use agent_runtime::{
 };
 pub use bench_saas::{
     saas_cross_tenant_suite, score_saas_matrix_summary, SaasGroundTruth, SaasProbe,
+};
+pub use encryption::{
+    decrypt_evidence_aes_gcm, encrypt_evidence_aes_gcm, EncryptionError, EncryptionKey,
 };
 pub use business_logic::{
     BusinessLogicAbuse, BusinessLogicDecision, BusinessLogicValidationCase, BusinessLogicValidator,
@@ -162,6 +166,7 @@ pub use orchestrator::{
     AutonomousBudget, AutonomousRun, AutonomousStep, AutonomousStepStatus, ToolCallRequest,
     ToolCallResult,
 };
+#[allow(deprecated)]
 pub use platform::{
     bootstrap_platform_state, compliance_mapping, deobfuscate_evidence, obfuscate_evidence,
     render_platform_audit_log, render_platform_onboarding, AuditEvent, BillingAccount,

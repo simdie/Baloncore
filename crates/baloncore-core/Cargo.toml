@@ -8,6 +8,9 @@ default = []
 live-models = ["reqwest/json"]
 
 [dependencies]
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -355,3 +355,69 @@ guards the field list), forcing the change to be intentional. Reverted.
 T0.d is now structurally pinned; the implementation gap is acknowledged
 rather than papered over.
 
+---
+
+## T2.b — real AES-256-GCM evidence encryption
+
+**Changed.**
+- Added `aes-gcm = "0.10"`, `rand = "0.8"`, `base64 = "0.22"` to the workspace
+  and `baloncore-core` dependencies (real, vetted MIT-licensed crates).
+- New module `crates/baloncore-core/src/encryption.rs` with:
+  - `EncryptionKey` (32 bytes; `Debug` is redacted; equality is intentionally
+    not derived).
+  - `EncryptionKey::from_env(var)` — loads a base64-encoded 32-byte key from
+    an env var. Wrong length / missing var / bad base64 each return distinct
+    errors.
+  - `EncryptionKey::generate()` — OS RNG; marked "tests only" in docs.
+  - `encrypt_evidence_aes_gcm(pt, &key)` — AEAD encrypt. Fresh 12-byte nonce
+    per call (OS RNG); returns `nonce || ciphertext || tag`.
+  - `decrypt_evidence_aes_gcm(envelope, &key)` — verifies tag; ANY single-bit
+    tamper in nonce/ciphertext/tag returns `EncryptionError::AuthFailed` and
+    NO plaintext is exposed. Short envelopes return `Malformed`.
+- Re-exported `encrypt_evidence_aes_gcm`, `decrypt_evidence_aes_gcm`,
+  `EncryptionKey`, `EncryptionError` from `lib.rs`.
+- `obfuscate_evidence` and `deobfuscate_evidence` now carry
+  `#[deprecated(note = "XOR obfuscation provides ZERO confidentiality; …")]`
+  attributes pointing operators at the AES-GCM path.
+
+**Tests added** (`crates/baloncore-core/src/encryption.rs::tests`, 11 in
+total):
+- `round_trip_recovers_plaintext`
+- `different_key_cannot_decrypt` (AuthFailed under wrong key)
+- `tamper_detection_single_byte_flip` (flip a ciphertext byte → AuthFailed)
+- `tamper_detection_nonce_flip` (flip a nonce byte → AuthFailed)
+- `from_env_missing_returns_missing_key`
+- `from_env_wrong_length_returns_invalid_key`
+- `from_env_round_trip`
+- `envelope_overhead_is_28_bytes` (pins envelope layout)
+- `ciphertext_changes_per_call_for_same_plaintext` (pins nonce freshness)
+- `malformed_envelope_returns_malformed`
+- `debug_does_not_leak_key_material`
+
+**Mutation check.** In `decrypt_evidence_aes_gcm`, replaced the AEAD verify
+call with `Ok(envelope[12..envelope.len() - 16].to_vec())` (skip the tag
+entirely, return raw "plaintext"). Re-ran the tamper tests →
+`tamper_detection_single_byte_flip` and `tamper_detection_nonce_flip` both
+RED with `called Result::unwrap_err() on an Ok value: ...`. Restored from
+`/tmp/enc.rs.bak` → GREEN.
+
+**What's still NEEDS-HUMAN.**
+- **KMS integration.** Today an operator manually base64s a 32-byte secret
+  into `BALONCORE_EVIDENCE_KEY`. A real deployment wants AWS KMS / GCP KMS /
+  Vault, with key rotation and audit. The `EncryptionKey` struct is the
+  natural extension point but the trait + provider implementations are not
+  yet wired.
+- **Per-bundle envelope encryption.** Today every bundle uses the same
+  32-byte master key. The next refinement is per-bundle DEK wrapped by a KEK.
+- **Wire encryption into the actual on-disk path.** The functions exist and
+  are unit-tested; the platform's `EvidenceBundleRef.obfuscated_at_rest`
+  metadata flag still describes the XOR path. The change to actually use
+  `encrypt_evidence_aes_gcm` for stored bundles is a separate commit that
+  needs decisions about format migration of any existing bundles on disk
+  (probably none in this repo's `.baloncore/` since that dir is gitignored).
+
+**V0 verdict change.** P5.S2 evidence encryption: FAKE → **REAL primitive,
+PARTIAL adoption**. The cryptographic primitive is implemented and tested
+end-to-end; integration into the bundle-write path and KMS plumbing remain
+NEEDS-HUMAN.
+

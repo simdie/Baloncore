@@ -493,12 +493,18 @@ impl Default for ObfuscationConfig {
 /// derived deterministically from a constant string and `config.key_id`.
 /// Reversible by anyone with this source. Provides ZERO confidentiality.
 ///
-/// Kept only so on-disk bytes do not display as obvious plaintext during
-/// local-dev demos. The corresponding `deobfuscate_evidence` is the same
-/// function (XOR is involutive).
+/// **DEPRECATED:** prefer
+/// [`crate::encryption::encrypt_evidence_aes_gcm`] with an
+/// [`crate::encryption::EncryptionKey`] loaded from the
+/// `BALONCORE_EVIDENCE_KEY` environment variable. The real AES-256-GCM path
+/// was added in T2.b (see `docs/VERIFICATION/PROGRESS.md`).
 ///
-/// Real encryption is NEEDS-HUMAN — see `docs/VERIFICATION/V0_GROUND_TRUTH.md`
-/// §6.3 and the corresponding entry in `PROGRESS.md`.
+/// Kept only so on-disk bytes do not display as obvious plaintext during
+/// legacy local-dev demos. The corresponding `deobfuscate_evidence` is the
+/// same function (XOR is involutive).
+#[deprecated(
+    note = "XOR obfuscation provides ZERO confidentiality; use encryption::encrypt_evidence_aes_gcm with a real key."
+)]
 pub fn obfuscate_evidence(data: &[u8], config: &ObfuscationConfig) -> Vec<u8> {
     let key_material = format!("baloncore-evidence-v1-key-{}", config.key_id);
     let mut key = [0u8; 32];
@@ -520,7 +526,11 @@ pub fn obfuscate_evidence(data: &[u8], config: &ObfuscationConfig) -> Vec<u8> {
 
 /// Inverse of `obfuscate_evidence`. Provides ZERO confidentiality — see that
 /// function's doc comment.
+#[deprecated(
+    note = "XOR obfuscation provides ZERO confidentiality; use encryption::decrypt_evidence_aes_gcm with a real key."
+)]
 pub fn deobfuscate_evidence(obfuscated: &[u8], config: &ObfuscationConfig) -> Vec<u8> {
+    #[allow(deprecated)]
     obfuscate_evidence(obfuscated, config)
 }
 
@@ -1058,6 +1068,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn obfuscate_evidence_is_only_obfuscation_not_secure_encryption() {
         // Sanity contract: the function is self-inverse and the output bytes are
         // recovered without a secret — pinning that we never accidentally treat it
