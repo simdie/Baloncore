@@ -626,7 +626,10 @@ enum Commands {
         #[arg(long, default_value_t = 3010)]
         lab_port: u16,
         /// Ground-truth JSON file describing planted vulns and decoys.
-        #[arg(long, default_value = "benchmarks/cases/saas-cross-tenant-bola/ground_truth.json")]
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/saas-cross-tenant-bola/ground_truth.json"
+        )]
         ground_truth: PathBuf,
         /// BALONCORE config (auth profiles, scope). Must allow the lab host.
         #[arg(long, default_value = "configs/baloncore-saas.toml")]
@@ -8917,9 +8920,8 @@ fn evaluate_benchmark(
                 );
             }
             let matrix: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(&matrix_path).with_context(|| {
-                    format!("Failed to read {}", matrix_path.display())
-                })?,
+                &std::fs::read_to_string(&matrix_path)
+                    .with_context(|| format!("Failed to read {}", matrix_path.display()))?,
             )
             .with_context(|| format!("Failed to parse {}", matrix_path.display()))?;
 
@@ -8931,9 +8933,7 @@ fn evaluate_benchmark(
             let analysis_path = run_dir
                 .as_ref()
                 .map(|p| p.join("cloud_iam_analysis.json"))
-                .unwrap_or_else(|| {
-                    PathBuf::from(".baloncore/cloud-iam/cloud_iam_analysis.json")
-                });
+                .unwrap_or_else(|| PathBuf::from(".baloncore/cloud-iam/cloud_iam_analysis.json"));
             if !analysis_path.exists() {
                 bail!(
                     "evaluate-benchmark (cloud_iam): {} does not exist. Run \
@@ -9348,66 +9348,70 @@ fn validate_saas_extras(
     });
     let body = serde_json::to_string(&project_query)?;
 
-    let post_graphql =
-        |id: &str, profile: &str, bearer: Option<&str>| -> Result<baloncore_core::web_api::HttpExchange> {
-            runner
-                .send(&baloncore_core::web_api::HttpRequestSpec {
-                    id: id.to_string(),
-                    profile: profile.to_string(),
-                    method: baloncore_core::web_api::HttpMethod::Post,
-                    url: graphql_url.clone(),
-                    bearer_token: bearer.map(str::to_string),
-                    cookies: vec![],
-                    headers: vec![
-                        ("Content-Type".to_string(), "application/json".to_string()),
-                        ("Content-Length".to_string(), body.len().to_string()),
-                    ],
-                    csrf_token_header: None,
-                    csrf_token: None,
-                })
-                .map_err(|e| anyhow::anyhow!("graphql request {id}: {e}"))
-        };
-    // Note: HttpRequestRunner doesn't expose a body field on HttpRequestSpec.
-    // The vulnerable-saas /graphql route reads the request body, so we need to
-    // send it directly via a raw TCP write. Fall back to a small ad-hoc client.
-    let post_graphql_raw =
-        |id: &str, profile: &str, bearer: Option<&str>| -> Result<baloncore_core::web_api::HttpExchange> {
-            use std::io::{Read, Write};
-            use std::net::TcpStream;
-            let mut stream = TcpStream::connect(format!("127.0.0.1:{lab_port}"))
-                .with_context(|| format!("connect to lab on port {lab_port}"))?;
-            let auth_header = bearer
-                .map(|t| format!("Authorization: Bearer {t}\r\n"))
-                .unwrap_or_default();
-            let req = format!(
-                "POST /graphql HTTP/1.1\r\nHost: 127.0.0.1:{lab_port}\r\n\
-                 Content-Type: application/json\r\nContent-Length: {}\r\n\
-                 {auth_header}Connection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(req.as_bytes())?;
-            let mut resp = Vec::new();
-            stream.read_to_end(&mut resp)?;
-            let text = String::from_utf8_lossy(&resp).to_string();
-            let (head, body_section) = text
-                .split_once("\r\n\r\n")
-                .ok_or_else(|| anyhow::anyhow!("malformed HTTP response from /graphql"))?;
-            let status_line = head.lines().next().unwrap_or("");
-            let parts: Vec<&str> = status_line.split_whitespace().collect();
-            let status = parts
-                .get(1)
-                .and_then(|s| s.parse::<u16>().ok())
-                .ok_or_else(|| anyhow::anyhow!("missing status code: {status_line}"))?;
-            Ok(baloncore_core::web_api::HttpExchange {
+    let post_graphql = |id: &str,
+                        profile: &str,
+                        bearer: Option<&str>|
+     -> Result<baloncore_core::web_api::HttpExchange> {
+        runner
+            .send(&baloncore_core::web_api::HttpRequestSpec {
                 id: id.to_string(),
                 profile: profile.to_string(),
                 method: baloncore_core::web_api::HttpMethod::Post,
                 url: graphql_url.clone(),
-                status,
-                response_headers: vec![],
-                response_body_excerpt: body_section.to_string(),
+                bearer_token: bearer.map(str::to_string),
+                cookies: vec![],
+                headers: vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Content-Length".to_string(), body.len().to_string()),
+                ],
+                csrf_token_header: None,
+                csrf_token: None,
             })
-        };
+            .map_err(|e| anyhow::anyhow!("graphql request {id}: {e}"))
+    };
+    // Note: HttpRequestRunner doesn't expose a body field on HttpRequestSpec.
+    // The vulnerable-saas /graphql route reads the request body, so we need to
+    // send it directly via a raw TCP write. Fall back to a small ad-hoc client.
+    let post_graphql_raw = |id: &str,
+                            profile: &str,
+                            bearer: Option<&str>|
+     -> Result<baloncore_core::web_api::HttpExchange> {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{lab_port}"))
+            .with_context(|| format!("connect to lab on port {lab_port}"))?;
+        let auth_header = bearer
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
+        let req = format!(
+            "POST /graphql HTTP/1.1\r\nHost: 127.0.0.1:{lab_port}\r\n\
+                 Content-Type: application/json\r\nContent-Length: {}\r\n\
+                 {auth_header}Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(req.as_bytes())?;
+        let mut resp = Vec::new();
+        stream.read_to_end(&mut resp)?;
+        let text = String::from_utf8_lossy(&resp).to_string();
+        let (head, body_section) = text
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| anyhow::anyhow!("malformed HTTP response from /graphql"))?;
+        let status_line = head.lines().next().unwrap_or("");
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        let status = parts
+            .get(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .ok_or_else(|| anyhow::anyhow!("missing status code: {status_line}"))?;
+        Ok(baloncore_core::web_api::HttpExchange {
+            id: id.to_string(),
+            profile: profile.to_string(),
+            method: baloncore_core::web_api::HttpMethod::Post,
+            url: graphql_url.clone(),
+            status,
+            response_headers: vec![],
+            response_body_excerpt: body_section.to_string(),
+        })
+    };
     let _ = post_graphql; // suppress unused-binding warning; we use the raw variant.
 
     let owner_ex = post_graphql_raw(
@@ -9445,7 +9449,8 @@ fn validate_saas_extras(
         tested_tenant: Some("org-a".to_string()),
         owner_tenant: Some("org-b".to_string()),
     };
-    let graphql_decision = baloncore_core::web_api::GraphQlBolaValidator::default().validate(&graphql_case);
+    let graphql_decision =
+        baloncore_core::web_api::GraphQlBolaValidator::default().validate(&graphql_case);
 
     // -----------------------------------------------------------------------
     // (b) Business-logic probe: state-skip on the order shipping flow.
@@ -9508,7 +9513,8 @@ fn validate_saas_extras(
     let bl_case = baloncore_core::BusinessLogicValidationCase {
         abuse_type: baloncore_core::BusinessLogicAbuse::StateSkip,
         workflow_name: "order: draft → ship (must require paid)".to_string(),
-        invariant_description: "Server must require status == 'paid' before allowing shipment".to_string(),
+        invariant_description: "Server must require status == 'paid' before allowing shipment"
+            .to_string(),
         before_state: baloncore_core::WorkflowState {
             status: create.status,
             body_excerpt: create.response_body_excerpt.clone(),
@@ -9593,11 +9599,17 @@ fn validate_saas_extras(
         println!("=== validate-saas-extras ===");
         println!(
             "GraphQL BOLA verified: {}",
-            matches!(&graphql_decision, baloncore_core::web_api::GraphQlBolaDecision::Verified(_))
+            matches!(
+                &graphql_decision,
+                baloncore_core::web_api::GraphQlBolaDecision::Verified(_)
+            )
         );
         println!(
             "Business-logic (price tamper) verified: {}",
-            matches!(&bl_decision, baloncore_core::BusinessLogicDecision::Verified(_))
+            matches!(
+                &bl_decision,
+                baloncore_core::BusinessLogicDecision::Verified(_)
+            )
         );
         println!("Artifacts: {}", out_dir.display());
     }
@@ -9660,7 +9672,10 @@ fn bench_saas(
     let suite = baloncore_core::saas_cross_tenant_suite(&gt);
 
     let _probe_ids: Vec<String> = if object_ids.is_empty() {
-        gt.all_probes().iter().map(|p| p.object_id.clone()).collect()
+        gt.all_probes()
+            .iter()
+            .map(|p| p.object_id.clone())
+            .collect()
     } else {
         object_ids
     };
@@ -9745,8 +9760,8 @@ fn bench_saas(
     fs::create_dir_all(&scan_run_dir)
         .with_context(|| format!("create {}", scan_run_dir.display()))?;
 
-    let self_exe = std::env::current_exe()
-        .context("resolve current executable for scan subprocess")?;
+    let self_exe =
+        std::env::current_exe().context("resolve current executable for scan subprocess")?;
 
     let _ = self_exe; // self_exe was reserved for the subprocess scan path; not used now.
 
@@ -9757,15 +9772,11 @@ fn bench_saas(
     // want to test — that's literally what the ground-truth file declares.
     let config = baloncore_core::BaloncoreConfig::load_from_path(&config_path)
         .with_context(|| format!("load config {}", config_path.display()))?;
-    let runner_full = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(
-        1024 * 1024,
-    )
-    .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+    let runner_full =
+        baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+            .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
 
-    fn token_for_profile(
-        config: &baloncore_core::BaloncoreConfig,
-        name: &str,
-    ) -> Option<String> {
+    fn token_for_profile(config: &baloncore_core::BaloncoreConfig, name: &str) -> Option<String> {
         let profile = config.auth_profiles.iter().find(|p| p.name == name)?;
         let cred = profile.credential.as_ref()?;
         let env_name = cred.bearer_token_env.as_ref()?;
@@ -9868,10 +9879,7 @@ fn bench_saas(
         let endpoint_descriptor = baloncore_core::web_api::ApiEndpoint {
             id: probe.endpoint.clone(),
             method: baloncore_core::web_api::HttpMethod::Get,
-            url_template: format!(
-                "{base_url}{}",
-                probe.endpoint.trim_start_matches("GET ")
-            ),
+            url_template: format!("{base_url}{}", probe.endpoint.trim_start_matches("GET ")),
             source: baloncore_core::web_api::EndpointSource::OpenApi,
             requires_auth: Some(true),
             path_parameters: vec!["orgId".to_string(), "projectId".to_string()],
@@ -9889,13 +9897,14 @@ fn bench_saas(
             anonymous_exchange: Some(anonymous_exchange.clone()),
         };
 
-        let observation = baloncore_core::web_api::AuthorizationMatrixObservation::classify_with_tenant(
-            &case,
-            &owner_profile, // role isn't critical here for the saas case
-            &probe.attacker_profile,
-            Some(&attacker_org),
-            Some(&owner_org_id),
-        );
+        let observation =
+            baloncore_core::web_api::AuthorizationMatrixObservation::classify_with_tenant(
+                &case,
+                &owner_profile, // role isn't critical here for the saas case
+                &probe.attacker_profile,
+                Some(&attacker_org),
+                Some(&owner_org_id),
+            );
 
         let evidence_markers: Vec<String> = vec![probe.object_id.clone()]
             .into_iter()
@@ -10316,9 +10325,8 @@ fn benchmark_determinism(
                 path.display()
             );
         }
-        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
-            anyhow::anyhow!("failed to load run {}: {}", path.display(), e)
-        })?;
+        let run = baloncore_core::load_benchmark_run(path)
+            .map_err(|e| anyhow::anyhow!("failed to load run {}: {}", path.display(), e))?;
         if run.suite_id != suite.suite_id {
             bail!(
                 "benchmark-determinism: run {} suite '{}' != selected '{}'",
@@ -10330,10 +10338,7 @@ fn benchmark_determinism(
         runs.push(run);
     }
 
-    println!(
-        "Comparing {} REAL runs of suite {}",
-        k, suite.suite_id
-    );
+    println!("Comparing {} REAL runs of suite {}", k, suite.suite_id);
     let result = baloncore_core::verify_determinism(&suite, &runs);
 
     ensure_parent_dir(&output)?;
@@ -10388,9 +10393,8 @@ fn benchmark_repetition(
                 path.display()
             );
         }
-        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
-            anyhow::anyhow!("Failed to load run {}: {}", path.display(), e)
-        })?;
+        let run = baloncore_core::load_benchmark_run(path)
+            .map_err(|e| anyhow::anyhow!("Failed to load run {}: {}", path.display(), e))?;
         if run.suite_id != suite.suite_id {
             bail!(
                 "benchmark-repetition: run {} suite '{}' != selected '{}'",
@@ -10439,13 +10443,8 @@ fn eval_gate_cmd(
             run_results.display()
         );
     }
-    let run = baloncore_core::load_benchmark_run(&run_results).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to load run from {}: {}",
-            run_results.display(),
-            e
-        )
-    })?;
+    let run = baloncore_core::load_benchmark_run(&run_results)
+        .map_err(|e| anyhow::anyhow!("Failed to load run from {}: {}", run_results.display(), e))?;
     if run.suite_id != suite.suite_id {
         bail!(
             "eval-gate: run-results suite '{}' != selected '{}'",
@@ -10514,13 +10513,8 @@ fn load_real_runs_for_doc(
         if !path.exists() {
             bail!("{cmd}: run-results path {} does not exist", path.display());
         }
-        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
-            anyhow::anyhow!(
-                "{cmd}: failed to load run {}: {}",
-                path.display(),
-                e
-            )
-        })?;
+        let run = baloncore_core::load_benchmark_run(path)
+            .map_err(|e| anyhow::anyhow!("{cmd}: failed to load run {}: {}", path.display(), e))?;
         let suite = baloncore_core::benchmark_suite_by_id(&run.suite_id).ok_or_else(|| {
             anyhow::anyhow!(
                 "{cmd}: run {} references unknown suite '{}'",
@@ -10851,17 +10845,15 @@ fn export_flagship_report(
             // FlagshipReport that was built from the run-dir artifacts; we do
             // not fabricate findings. If no PDF binary is available the
             // command errors with an explicit install hint.
-            let pdf_output = output.ok_or_else(|| {
-                anyhow::anyhow!("--format pdf requires --output <path.pdf>")
-            })?;
+            let pdf_output = output
+                .ok_or_else(|| anyhow::anyhow!("--format pdf requires --output <path.pdf>"))?;
             let html = report.to_html();
-            let parent = pdf_output.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-            fs::create_dir_all(&parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-            let html_temp = parent.join(format!(
-                ".flagship-temp-{}.html",
-                std::process::id()
-            ));
+            let parent = pdf_output
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            fs::create_dir_all(&parent).with_context(|| format!("create {}", parent.display()))?;
+            let html_temp = parent.join(format!(".flagship-temp-{}.html", std::process::id()));
             fs::write(&html_temp, &html)
                 .with_context(|| format!("write temp html {}", html_temp.display()))?;
 
@@ -11983,8 +11975,7 @@ fn rigor_proof(
     let findings = lifecycle_findings_from_evidence_store(&store_path)?;
     let target_name = target.unwrap_or_else(|| "target".to_string());
 
-    let finding_ids: Vec<String> =
-        findings.iter().map(|f| f.finding_id.clone()).collect();
+    let finding_ids: Vec<String> = findings.iter().map(|f| f.finding_id.clone()).collect();
 
     let scope_config = baloncore_core::ScopeConfig {
         allow_urls: vec!["*".to_string()],
@@ -12789,7 +12780,6 @@ mod tests {
     // with NO synthesis fallback — if no binary is available the call errors
     // with a clear "install one of these" message. These tests pin both
     // branches.
-
     #[test]
     fn render_pdf_from_html_produces_real_pdf_magic_or_explicit_install_error() {
         let dir = test_workspace("pdf-render");
@@ -12828,11 +12818,7 @@ mod tests {
                     msg.contains("PDF rendering requires"),
                     "missing install hint, got: {msg}"
                 );
-                for needed in [
-                    "wkhtmltopdf",
-                    "chromium",
-                    "google-chrome",
-                ] {
+                for needed in ["wkhtmltopdf", "chromium", "google-chrome"] {
                     assert!(
                         msg.contains(needed),
                         "install hint must mention `{needed}`; got: {msg}"
@@ -12896,10 +12882,10 @@ mod tests {
         let page = repo_root.join("apps/web/app/dashboard/page.tsx");
         let lib = repo_root.join("apps/web/lib/baloncore.ts");
 
-        let page_src = fs::read_to_string(&page)
-            .unwrap_or_else(|e| panic!("read {}: {}", page.display(), e));
-        let lib_src = fs::read_to_string(&lib)
-            .unwrap_or_else(|e| panic!("read {}: {}", lib.display(), e));
+        let page_src =
+            fs::read_to_string(&page).unwrap_or_else(|e| panic!("read {}: {}", page.display(), e));
+        let lib_src =
+            fs::read_to_string(&lib).unwrap_or_else(|e| panic!("read {}: {}", lib.display(), e));
 
         for needed in [
             "fetchMetricsSummary",

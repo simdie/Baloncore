@@ -76,13 +76,15 @@ fn validate_saas_extras_verifies_both_planted_bugs() {
         serde_json::from_slice(&std::fs::read(&summary_path).unwrap()).expect("parse summary");
 
     assert_eq!(
-        summary["graphql_bola"]["verified"], serde_json::Value::Bool(true),
+        summary["graphql_bola"]["verified"],
+        serde_json::Value::Bool(true),
         "GraphQL BOLA must be Verified on the planted cross-tenant probe; \
          got: {}",
         summary["graphql_bola"]
     );
     assert_eq!(
-        summary["business_logic"]["verified"], serde_json::Value::Bool(true),
+        summary["business_logic"]["verified"],
+        serde_json::Value::Bool(true),
         "Business-logic StateSkip must be Verified on the planted ship-without-pay probe; \
          got: {}",
         summary["business_logic"]

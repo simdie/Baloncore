@@ -1046,8 +1046,18 @@ mod tests {
     fn obfuscation_config_default_does_not_claim_a_real_cipher() {
         let cfg = ObfuscationConfig::default();
         let banned = [
-            "AES", "aes", "GCM", "gcm", "CHACHA", "ChaCha", "ChaCha20", "chacha",
-            "RSA", "rsa", "Curve25519", "curve25519",
+            "AES",
+            "aes",
+            "GCM",
+            "gcm",
+            "CHACHA",
+            "ChaCha",
+            "ChaCha20",
+            "chacha",
+            "RSA",
+            "rsa",
+            "Curve25519",
+            "curve25519",
         ];
         for b in banned {
             assert!(

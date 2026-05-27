@@ -4590,7 +4590,14 @@ mod tests {
         }))
         .unwrap();
         let dumped = req_json.to_string();
-        for banned in ["authorization", "tenant", "session", "cookie", "bearer", "x-org-id"] {
+        for banned in [
+            "authorization",
+            "tenant",
+            "session",
+            "cookie",
+            "bearer",
+            "x-org-id",
+        ] {
             assert!(
                 !dumped.to_lowercase().contains(banned),
                 "HttpRequest serialization must not carry `{}` — see PROGRESS.md T2.a; \

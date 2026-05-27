@@ -57,18 +57,14 @@ use baloncore_core::web_api::{
 /// process clean.
 fn spawn_protected_lab(max_requests: usize) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test lab");
-    listener
-        .set_nonblocking(false)
-        .expect("blocking listener");
+    listener.set_nonblocking(false).expect("blocking listener");
     let port = listener.local_addr().expect("local addr").port();
     thread::spawn(move || {
         for _ in 0..max_requests {
             let Ok((mut stream, _)) = listener.accept() else {
                 continue;
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .ok();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
             let mut buf = vec![0u8; 4096];
             let n = match stream.read(&mut buf) {
                 Ok(n) => n,
@@ -163,9 +159,7 @@ fn firewall_rejects_schema_clean_false_bola_against_live_lab() {
     let object_url = format!("http://127.0.0.1:{port}/api/admin/secrets/secret-001");
 
     // 2. Build a confident, schema-clean FALSE hypothesis on that endpoint.
-    let canned = schema_clean_false_bola_hypothesis(&format!(
-        "/api/admin/secrets/{{id}}"
-    ));
+    let canned = schema_clean_false_bola_hypothesis(&format!("/api/admin/secrets/{{id}}"));
     let client = CannedClient { text: canned };
     let model = ModelConfig::default();
     let mut budget = ModelBudget::conservative();
@@ -195,8 +189,7 @@ fn firewall_rejects_schema_clean_false_bola_against_live_lab() {
     assert_eq!(bridge.validator, "bola-validator");
 
     // 4. Run the REAL deterministic validator against the LIVE lab.
-    let runner =
-        HttpRequestRunner::new().expect("HttpRequestRunner::new must succeed in tests");
+    let runner = HttpRequestRunner::new().expect("HttpRequestRunner::new must succeed in tests");
 
     let owner = runner
         .send(&HttpRequestSpec {
@@ -278,10 +271,7 @@ fn firewall_rejects_schema_clean_false_bola_against_live_lab() {
             assert!(
                 rejection.reason.to_lowercase().contains("blocked")
                     || rejection.reason.to_lowercase().contains("not")
-                    || rejection
-                        .observations
-                        .iter()
-                        .any(|o| o.contains("403")),
+                    || rejection.observations.iter().any(|o| o.contains("403")),
                 "rejection should explain why (attacker was blocked); got: {:?}",
                 rejection
             );
@@ -320,9 +310,7 @@ fn validator_does_verify_when_lab_is_actually_vulnerable() {
             let Ok((mut stream, _)) = listener.accept() else {
                 continue;
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .ok();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
             let mut buf = vec![0u8; 4096];
             let _ = stream.read(&mut buf);
             let body = r#"{"id":"obj-001","title":"owner secret","value":"alpha-bravo-charlie"}"#;

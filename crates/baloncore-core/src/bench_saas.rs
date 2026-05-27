@@ -52,14 +52,16 @@ pub struct SaasGroundTruth {
 impl SaasGroundTruth {
     /// All probes, vulns + decoys, in declaration order.
     pub fn all_probes(&self) -> Vec<&SaasProbe> {
-        self.vulnerabilities.iter().chain(self.decoys.iter()).collect()
+        self.vulnerabilities
+            .iter()
+            .chain(self.decoys.iter())
+            .collect()
     }
 
     pub fn load_from<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let raw = std::fs::read_to_string(path.as_ref())
             .map_err(|e| format!("read {}: {e}", path.as_ref().display()))?;
-        serde_json::from_str(&raw)
-            .map_err(|e| format!("parse {}: {e}", path.as_ref().display()))
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.as_ref().display()))
     }
 }
 
@@ -273,7 +275,14 @@ pub fn score_saas_matrix_summary(
             domain: BenchmarkDomain::WebApi,
             actual_classification: matched.map(|m| m.classification.clone()),
             actual_severity: None,
-            actual_state: Some(if matched.is_some() { "scanned" } else { "missing" }.to_string()),
+            actual_state: Some(
+                if matched.is_some() {
+                    "scanned"
+                } else {
+                    "missing"
+                }
+                .to_string(),
+            ),
             prediction,
             confidence,
             evidence_found,
@@ -413,10 +422,7 @@ mod tests {
         // as a BOLA must produce FalsePositive in the run.
         let gt = gt_fixture();
         let suite = saas_cross_tenant_suite(&gt);
-        let m = matrix(
-            "TenantIsolationViolation",
-            "BrokenObjectLevelAuthorization",
-        );
+        let m = matrix("TenantIsolationViolation", "BrokenObjectLevelAuthorization");
         let run = score_saas_matrix_summary(&m, &gt, &suite);
         assert_eq!(run.results[0].prediction, GroundTruthLabel::TruePositive);
         assert_eq!(
@@ -454,8 +460,8 @@ mod tests {
         let gt = gt_fixture();
         let suite = saas_cross_tenant_suite(&gt);
         let m = matrix(
-            "TenantIsolationViolation",          // planted: detected (good)
-            "BrokenObjectLevelAuthorization",    // decoy: WRONGLY flagged
+            "TenantIsolationViolation",       // planted: detected (good)
+            "BrokenObjectLevelAuthorization", // decoy: WRONGLY flagged
         );
         let run = score_saas_matrix_summary(&m, &gt, &suite);
         let gate = crate::evaluation::eval_gate(
@@ -484,9 +490,7 @@ mod tests {
         let suite = saas_cross_tenant_suite(&gt);
         let m = matrix("TenantIsolationViolation", "BlockedAsExpected");
         let run = score_saas_matrix_summary(&m, &gt, &suite);
-        let gate = crate::evaluation::eval_gate(
-            &run, &suite, 0.70, 0, 0.10, None, None,
-        );
+        let gate = crate::evaluation::eval_gate(&run, &suite, 0.70, 0, 0.10, None, None);
         assert!(
             gate.passed,
             "ci gate must PASS on a clean run; summary={}",

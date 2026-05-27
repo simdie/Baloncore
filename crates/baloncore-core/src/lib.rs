@@ -4,7 +4,6 @@ pub mod agents;
 pub mod attack_graph;
 pub mod bench_saas;
 pub mod business_logic;
-pub mod encryption;
 pub mod ci;
 pub mod ci_analytics;
 pub mod ci_pipeline;
@@ -16,6 +15,7 @@ pub mod config;
 pub mod defense;
 pub mod diligence;
 pub mod discovery;
+pub mod encryption;
 pub mod evaluation;
 pub mod evidence;
 pub mod finding;
@@ -52,9 +52,6 @@ pub use agent_runtime::{
 };
 pub use bench_saas::{
     saas_cross_tenant_suite, score_saas_matrix_summary, SaasGroundTruth, SaasProbe,
-};
-pub use encryption::{
-    decrypt_evidence_aes_gcm, encrypt_evidence_aes_gcm, EncryptionError, EncryptionKey,
 };
 pub use business_logic::{
     BusinessLogicAbuse, BusinessLogicDecision, BusinessLogicValidationCase, BusinessLogicValidator,
@@ -112,6 +109,9 @@ pub use diligence::{
     DiligenceTrend, EvidenceQualityAssessment, FrameworkControlStatus, FrameworkCoverage,
     FrameworkSpecificReport, InvestmentReadinessScore, QuestionnaireAnswer, QuestionnaireSection,
     RiskCategory, RiskHeatmap, SecurityDiligenceReport, SecurityPosture, SecurityQuestionnaire,
+};
+pub use encryption::{
+    decrypt_evidence_aes_gcm, encrypt_evidence_aes_gcm, EncryptionError, EncryptionKey,
 };
 pub use evaluation::{
     all_benchmark_suites, append_to_history, benchmark_ci_gate, benchmark_suite_by_id,

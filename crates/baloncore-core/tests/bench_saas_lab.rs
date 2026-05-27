@@ -11,9 +11,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use baloncore_core::{
-    evaluation::GroundTruthLabel, load_benchmark_run, BenchmarkRun,
-};
+use baloncore_core::{evaluation::GroundTruthLabel, load_benchmark_run, BenchmarkRun};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -56,10 +54,8 @@ fn bench_saas_real_lab_produces_real_benchmark_run() {
         return;
     };
     let root = repo_root();
-    let workspace = std::env::temp_dir().join(format!(
-        "baloncore-bench-saas-test-{}",
-        std::process::id()
-    ));
+    let workspace =
+        std::env::temp_dir().join(format!("baloncore-bench-saas-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&workspace);
     std::fs::create_dir_all(&workspace).expect("create workspace");
     let run_out = workspace.join("benchmark_run.json");
@@ -81,8 +77,7 @@ fn bench_saas_real_lab_produces_real_benchmark_run() {
     assert!(run_out.exists(), "benchmark_run.json must exist");
     assert!(sc_out.exists(), "scorecard.json must exist");
 
-    let run: BenchmarkRun =
-        load_benchmark_run(&run_out).expect("load BenchmarkRun");
+    let run: BenchmarkRun = load_benchmark_run(&run_out).expect("load BenchmarkRun");
     assert_eq!(run.suite_id, "baloncore-saas-cross-tenant-v1");
     assert_eq!(run.results.len(), 2, "expected 2 probes (planted + decoy)");
 

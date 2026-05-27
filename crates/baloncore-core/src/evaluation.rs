@@ -5588,8 +5588,7 @@ mod p2s5_tests {
     #[test]
     fn determinism_check_three_identical_runs() {
         let suite = cloud_iam_benchmark_suite();
-        let runs: Vec<BenchmarkRun> =
-            (0..3).map(|_| generate_golden_baseline(&suite)).collect();
+        let runs: Vec<BenchmarkRun> = (0..3).map(|_| generate_golden_baseline(&suite)).collect();
         let result = verify_determinism(&suite, &runs);
         assert!(result.scores_identical);
         assert_eq!(result.runs_compared, 3);

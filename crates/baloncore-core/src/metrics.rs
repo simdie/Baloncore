@@ -303,9 +303,7 @@ pub fn ci_blocked_criticals(findings: &[FindingRecord]) -> usize {
         .filter(|f| {
             matches!(
                 f.state,
-                FindingState::Verified
-                    | FindingState::Reported
-                    | FindingState::NeedsMoreEvidence
+                FindingState::Verified | FindingState::Reported | FindingState::NeedsMoreEvidence
             )
         })
         .filter(|f| f.severity.eq_ignore_ascii_case("critical"))
