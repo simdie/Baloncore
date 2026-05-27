@@ -594,14 +594,19 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Run benchmark evaluation and CI gate in one pass (CI-friendly).
+    /// Run benchmark evaluation and CI gate against REAL run artifacts.
+    ///
+    /// `--run-results` must point at a `BenchmarkRun` JSON produced by an actual
+    /// BALONCORE scan (e.g. via `bench-saas`). There is no synthetic-fallback
+    /// path: if no real run is supplied the command errors and exits non-zero.
     BenchmarkCi {
         #[arg(long)]
         suite: Option<String>,
         #[arg(long)]
         domain: Option<String>,
-        #[arg(long, default_value = ".baloncore/benchmark/golden")]
-        golden_dir: PathBuf,
+        /// Path to a real BenchmarkRun JSON produced by a scan. REQUIRED.
+        #[arg(long)]
+        run_results: Option<PathBuf>,
         #[arg(long, default_value = ".baloncore/benchmark/run.json")]
         output: PathBuf,
         #[arg(long, default_value = ".baloncore/benchmark/scorecard.json")]
@@ -616,8 +621,6 @@ enum Commands {
         min_f1: f64,
         #[arg(long, default_value = "0.20")]
         max_fpr: f64,
-        #[arg(long)]
-        save_golden: bool,
         #[arg(long)]
         json: bool,
     },
@@ -670,12 +673,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Verify fixture-provider determinism: run K evaluations and assert identical scores.
+    /// Verify K REAL benchmark runs of the same suite are score-identical.
     BenchmarkDeterminism {
         #[arg(long)]
         suite: Option<String>,
         #[arg(long)]
         domain: Option<String>,
+        /// K real BenchmarkRun JSON paths. Length must equal --k. REQUIRED.
+        #[arg(long, num_args = 1.., required = true)]
+        run_results: Vec<PathBuf>,
         #[arg(long, default_value_t = 2)]
         k: usize,
         #[arg(long, default_value = ".baloncore/benchmark/determinism.json")]
@@ -683,12 +689,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Run benchmark K times and compute mean ± stddev for live provider reproducibility.
+    /// Compute mean ± stddev across K REAL benchmark runs (one path per run).
     BenchmarkRepetition {
         #[arg(long)]
         suite: Option<String>,
         #[arg(long)]
         domain: Option<String>,
+        /// K real BenchmarkRun JSON paths. Length must equal --k. REQUIRED.
+        #[arg(long, num_args = 1.., required = true)]
+        run_results: Vec<PathBuf>,
         #[arg(long, default_value_t = 3)]
         k: usize,
         #[arg(long, default_value = ".baloncore/benchmark/repetition.json")]
@@ -696,12 +705,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Eval gate: check precision, decoy FP, and recall regression against a baseline.
+    /// Eval gate against a REAL run; check precision, decoy FP, and recall regression vs baseline.
     EvalGate {
         #[arg(long)]
         suite: Option<String>,
         #[arg(long)]
         domain: Option<String>,
+        /// Path to a real BenchmarkRun JSON produced by a scan. REQUIRED.
+        #[arg(long)]
+        run_results: PathBuf,
         #[arg(long, default_value = "0.70")]
         min_precision: f64,
         #[arg(long, default_value_t = 0)]
@@ -715,15 +727,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Generate benchmarks/METHODOLOGY.md with auto-quoted headline numbers.
+    /// Generate benchmarks/METHODOLOGY.md, quoting REAL run results (one path per suite).
     GenerateMethodologyDoc {
+        /// Real BenchmarkRun JSON files (one per suite to include). REQUIRED.
+        #[arg(long, num_args = 1.., required = true)]
+        run_results: Vec<PathBuf>,
         #[arg(long, default_value = "benchmarks/METHODOLOGY.md")]
         output: PathBuf,
         #[arg(long)]
         json: bool,
     },
-    /// Generate docs/DILIGENCE/BENCHMARK.md with auto-quoted results.
+    /// Generate docs/DILIGENCE/BENCHMARK.md, quoting REAL run results (one path per suite).
     GenerateBenchmarkDoc {
+        /// Real BenchmarkRun JSON files (one per suite to include). REQUIRED.
+        #[arg(long, num_args = 1.., required = true)]
+        run_results: Vec<PathBuf>,
         #[arg(long, default_value = "docs/DILIGENCE/BENCHMARK.md")]
         output: PathBuf,
         #[arg(long)]
@@ -1363,7 +1381,7 @@ fn main() -> Result<()> {
         Commands::BenchmarkCi {
             suite,
             domain,
-            golden_dir,
+            run_results,
             output,
             scorecard_output,
             min_accuracy,
@@ -1371,12 +1389,11 @@ fn main() -> Result<()> {
             min_recall,
             min_f1,
             max_fpr,
-            save_golden,
             json,
         } => benchmark_ci(
             suite,
             domain,
-            golden_dir,
+            run_results,
             output,
             scorecard_output,
             min_accuracy,
@@ -1384,7 +1401,6 @@ fn main() -> Result<()> {
             min_recall,
             min_f1,
             max_fpr,
-            save_golden,
             json,
         ),
         Commands::BenchmarkHistory {
@@ -1415,20 +1431,23 @@ fn main() -> Result<()> {
         Commands::BenchmarkDeterminism {
             suite,
             domain,
+            run_results,
             k,
             output,
             json,
-        } => benchmark_determinism(suite, domain, k, output, json),
+        } => benchmark_determinism(suite, domain, run_results, k, output, json),
         Commands::BenchmarkRepetition {
             suite,
             domain,
+            run_results,
             k,
             output,
             json,
-        } => benchmark_repetition(suite, domain, k, output, json),
+        } => benchmark_repetition(suite, domain, run_results, k, output, json),
         Commands::EvalGate {
             suite,
             domain,
+            run_results,
             min_precision,
             max_decoy_fp,
             max_recall_drop,
@@ -1438,6 +1457,7 @@ fn main() -> Result<()> {
         } => eval_gate_cmd(
             suite,
             domain,
+            run_results,
             min_precision,
             max_decoy_fp,
             max_recall_drop,
@@ -1445,10 +1465,16 @@ fn main() -> Result<()> {
             output,
             json,
         ),
-        Commands::GenerateMethodologyDoc { output, json } => {
-            generate_methodology_doc_cmd(output, json)
-        }
-        Commands::GenerateBenchmarkDoc { output, json } => generate_benchmark_doc_cmd(output, json),
+        Commands::GenerateMethodologyDoc {
+            run_results,
+            output,
+            json,
+        } => generate_methodology_doc_cmd(run_results, output, json),
+        Commands::GenerateBenchmarkDoc {
+            run_results,
+            output,
+            json,
+        } => generate_benchmark_doc_cmd(run_results, output, json),
         Commands::MetricsSummary { store, json } => metrics_summary(store, json),
         Commands::MetricsTrend {
             store,
@@ -8799,71 +8825,95 @@ fn evaluate_benchmark(
 
     let results = match suite.domain {
         baloncore_core::BenchmarkDomain::WebApi => {
-            let run_path = run_dir
-                .as_ref()
-                .map(|p| p.as_path())
-                .unwrap_or_else(|| std::path::Path::new(".baloncore/runs"));
-            let matrix_path = find_latest_matrix_summary(run_path)?;
-            if matrix_path.is_none() {
-                println!(
-                    "No matrix_summary.json found in {}. Running with ground-truth baseline.",
-                    run_path.display()
+            let run_path = run_dir.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "evaluate-benchmark (web_api): --run-dir is required and must contain \
+                     matrix_summary.json from a real scan (e.g. produced by scan-openapi-bola \
+                     or bench-saas). There is no synthetic-fallback path."
+                )
+            })?;
+            let matrix_path = run_path.join("matrix_summary.json");
+            if !matrix_path.exists() {
+                bail!(
+                    "evaluate-benchmark (web_api): {} does not exist. Produce real scan artifacts \
+                     first (e.g. `baloncore scan-openapi-bola ...`).",
+                    matrix_path.display()
                 );
-                return run_ground_truth_baseline(&suite, &output, &scorecard_output, json);
             }
             let matrix: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(matrix_path.unwrap())
-                    .with_context(|| "Failed to read matrix_summary.json")?,
+                &std::fs::read_to_string(&matrix_path).with_context(|| {
+                    format!("Failed to read {}", matrix_path.display())
+                })?,
             )
-            .with_context(|| "Failed to parse matrix_summary.json")?;
+            .with_context(|| format!("Failed to parse {}", matrix_path.display()))?;
 
             let validations = extract_web_api_validations(&matrix);
             let timing_ms: Vec<(String, u64)> = Vec::new();
             baloncore_core::evaluate_web_api_run(&suite, &validations, &timing_ms)
         }
         baloncore_core::BenchmarkDomain::CloudIam => {
-            let analysis_path =
-                std::path::Path::new(".baloncore/cloud-iam/cloud_iam_analysis.json");
+            let analysis_path = run_dir
+                .as_ref()
+                .map(|p| p.join("cloud_iam_analysis.json"))
+                .unwrap_or_else(|| {
+                    PathBuf::from(".baloncore/cloud-iam/cloud_iam_analysis.json")
+                });
             if !analysis_path.exists() {
-                println!("No cloud IAM analysis found. Run -- analyze-cloud-iam first.");
-                return run_ground_truth_baseline(&suite, &output, &scorecard_output, json);
+                bail!(
+                    "evaluate-benchmark (cloud_iam): {} does not exist. Run \
+                     `baloncore analyze-cloud-iam ...` first to produce real analysis artifacts.",
+                    analysis_path.display()
+                );
             }
             let analysis: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(analysis_path)
-                    .with_context(|| "Failed to read cloud_iam_analysis.json")?,
+                &std::fs::read_to_string(&analysis_path)
+                    .with_context(|| format!("Failed to read {}", analysis_path.display()))?,
             )
-            .with_context(|| "Failed to parse cloud_iam_analysis.json")?;
+            .with_context(|| format!("Failed to parse {}", analysis_path.display()))?;
 
             let findings = extract_cloud_iam_findings(&analysis);
             baloncore_core::evaluate_cloud_iam_findings(&suite, &findings)
         }
         baloncore_core::BenchmarkDomain::Web3 => {
-            let analysis_path = std::path::Path::new(".baloncore/web3/web3_analysis.json");
+            let analysis_path = run_dir
+                .as_ref()
+                .map(|p| p.join("web3_analysis.json"))
+                .unwrap_or_else(|| PathBuf::from(".baloncore/web3/web3_analysis.json"));
             if !analysis_path.exists() {
-                println!("No Web3 analysis found. Run -- analyze-web3 first.");
-                return run_ground_truth_baseline(&suite, &output, &scorecard_output, json);
+                bail!(
+                    "evaluate-benchmark (web3): {} does not exist. Run \
+                     `baloncore analyze-web3 ...` first to produce real analysis artifacts.",
+                    analysis_path.display()
+                );
             }
             let analysis: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(analysis_path)
-                    .with_context(|| "Failed to read web3_analysis.json")?,
+                &std::fs::read_to_string(&analysis_path)
+                    .with_context(|| format!("Failed to read {}", analysis_path.display()))?,
             )
-            .with_context(|| "Failed to parse web3_analysis.json")?;
+            .with_context(|| format!("Failed to parse {}", analysis_path.display()))?;
 
             let findings = extract_web3_findings(&analysis);
             baloncore_core::evaluate_web3_findings(&suite, &findings)
         }
         baloncore_core::BenchmarkDomain::Evidence => {
-            let finding_store_path_ref = findings_store_path
-                .as_ref()
-                .map(|p| p.as_path())
-                .unwrap_or_else(|| std::path::Path::new(".baloncore/findings/store.json"));
-            let store = if finding_store_path_ref.exists() {
-                let data = std::fs::read_to_string(finding_store_path_ref)
-                    .with_context(|| "Failed to read finding store")?;
-                serde_json::from_str::<serde_json::Value>(&data).unwrap_or(serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
+            let finding_store_path_ref = findings_store_path.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "evaluate-benchmark (evidence): --findings-store-path is required and must \
+                     point at a real finding store (e.g. .baloncore/findings/store.json from a \
+                     completed scan). There is no synthetic-fallback path."
+                )
+            })?;
+            if !finding_store_path_ref.exists() {
+                bail!(
+                    "evaluate-benchmark (evidence): {} does not exist. Produce a real finding \
+                     store first.",
+                    finding_store_path_ref.display()
+                );
+            }
+            let data = std::fs::read_to_string(finding_store_path_ref)
+                .with_context(|| "Failed to read finding store")?;
+            let store: serde_json::Value = serde_json::from_str(&data)
+                .with_context(|| "Failed to parse finding store JSON")?;
             let manifest_ok = true;
             let signature_ok = true;
             let lifecycle_ok = store
@@ -8879,8 +8929,13 @@ fn evaluate_benchmark(
                 tampered_detected,
             )
         }
-        _ => {
-            return run_ground_truth_baseline(&suite, &output, &scorecard_output, json);
+        other => {
+            bail!(
+                "evaluate-benchmark: no real-artifact evaluator wired for domain '{}'. \
+                 Implement a scan pipeline that writes domain-specific artifacts and an \
+                 extractor here before scoring.",
+                other.as_str()
+            );
         }
     };
 
@@ -8909,61 +8964,6 @@ fn evaluate_benchmark(
         println!("\nBenchmark run written to {}", output.display());
         println!("Scorecard written to {}", scorecard_output.display());
         println!("Grade: {}", scorecard.metrics.grade.as_str());
-    }
-
-    Ok(())
-}
-
-fn run_ground_truth_baseline(
-    suite: &baloncore_core::BenchmarkSuite,
-    output: &Path,
-    scorecard_output: &Path,
-    json: bool,
-) -> Result<()> {
-    let results: Vec<baloncore_core::BenchmarkResult> = suite
-        .cases
-        .iter()
-        .map(|case| baloncore_core::BenchmarkResult {
-            result_id: format!("result_{}", case.case_id),
-            suite_id: suite.suite_id.clone(),
-            case_id: case.case_id.clone(),
-            domain: case.domain.clone(),
-            actual_classification: case.expected_classification.clone(),
-            actual_severity: case.expected_severity.clone(),
-            actual_state: Some("baseline".to_string()),
-            prediction: case.ground_truth.clone(),
-            confidence: 1.0,
-            evidence_found: case.expected_evidence_keys.clone(),
-            time_to_result_ms: 0,
-            error: None,
-        })
-        .collect();
-
-    let run = baloncore_core::create_benchmark_run_from_results(
-        &suite.suite_id,
-        suite.domain.clone(),
-        &suite.version,
-        results,
-        baloncore_core::BenchmarkConfig::default(),
-    );
-
-    let scorecard = baloncore_core::generate_scorecard(suite, &run, None, None);
-
-    ensure_parent_dir(output)?;
-    ensure_parent_dir(scorecard_output)?;
-    baloncore_core::save_benchmark_run(&run, output)
-        .map_err(|e| anyhow::anyhow!("Failed to save benchmark run: {}", e))?;
-    baloncore_core::save_scorecard(&scorecard, scorecard_output)
-        .map_err(|e| anyhow::anyhow!("Failed to save scorecard: {}", e))?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&scorecard)?);
-    } else {
-        let md = baloncore_core::render_scorecard(&scorecard);
-        println!("{}", md);
-        println!("\n(Ground truth baseline — no live validation results available)");
-        println!("Benchmark run written to {}", output.display());
-        println!("Scorecard written to {}", scorecard_output.display());
     }
 
     Ok(())
@@ -9080,30 +9080,6 @@ fn benchmark_regression(
     }
 }
 
-fn find_latest_matrix_summary(run_dir: &Path) -> Result<Option<PathBuf>> {
-    if !run_dir.exists() {
-        return Ok(None);
-    }
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(run_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let summary = path.join("matrix_summary.json");
-                if summary.exists() {
-                    candidates.push(summary);
-                }
-            }
-        }
-    }
-    candidates.sort_by(|a, b| {
-        let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-        let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-        b_time.cmp(&a_time)
-    });
-    Ok(candidates.into_iter().next())
-}
-
 fn extract_web_api_validations(
     matrix: &serde_json::Value,
 ) -> Vec<(String, String, String, Vec<String>)> {
@@ -9210,10 +9186,11 @@ fn extract_web3_findings(analysis: &serde_json::Value) -> Vec<(String, String, S
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn benchmark_ci(
     suite_id: Option<String>,
     domain: Option<String>,
-    golden_dir: PathBuf,
+    run_results: Option<PathBuf>,
     output: PathBuf,
     scorecard_output: PathBuf,
     min_accuracy: f64,
@@ -9221,7 +9198,6 @@ fn benchmark_ci(
     min_recall: f64,
     min_f1: f64,
     max_fpr: f64,
-    save_golden: bool,
     json: bool,
 ) -> Result<()> {
     let suite = if let Some(ref id) = suite_id {
@@ -9247,34 +9223,33 @@ fn benchmark_ci(
         return Ok(());
     };
 
-    if save_golden {
-        ensure_parent_dir(&golden_dir)?;
-        baloncore_core::save_golden_baseline(&suite, &golden_dir)
-            .map_err(|e| anyhow::anyhow!("Failed to save golden baseline: {}", e))?;
-        if !json {
-            println!("Golden baseline saved to {}", golden_dir.display());
-        }
+    let run_path = run_results.ok_or_else(|| {
+        anyhow::anyhow!(
+            "benchmark-ci requires --run-results <path>: a real BenchmarkRun JSON produced by a \
+             scan. There is no synthetic-fallback path. Run a real scan first \
+             (e.g. `baloncore bench-saas`) to produce the run artifact, then pass it here."
+        )
+    })?;
+    if !run_path.exists() {
+        bail!(
+            "benchmark-ci: --run-results path {} does not exist. Produce real run artifacts first.",
+            run_path.display()
+        );
     }
-
-    let run = if golden_dir.exists() {
-        let golden_path = golden_dir.join(format!("golden_{}_run.json", suite.domain.as_str()));
-        if golden_path.exists() {
-            baloncore_core::load_benchmark_run(&golden_path)
-                .map_err(|e| anyhow::anyhow!("Failed to load golden baseline: {}", e))?
-        } else {
-            let baseline = baloncore_core::generate_golden_baseline(&suite);
-            ensure_parent_dir(&golden_dir)?;
-            baloncore_core::save_golden_baseline(&suite, &golden_dir)
-                .map_err(|e| anyhow::anyhow!("Failed to save golden baseline: {}", e))?;
-            baseline
-        }
-    } else {
-        let baseline = baloncore_core::generate_golden_baseline(&suite);
-        ensure_parent_dir(&golden_dir)?;
-        baloncore_core::save_golden_baseline(&suite, &golden_dir)
-            .map_err(|e| anyhow::anyhow!("Failed to save golden baseline: {}", e))?;
-        baseline
-    };
+    let run = baloncore_core::load_benchmark_run(&run_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to load benchmark run from {}: {}",
+            run_path.display(),
+            e
+        )
+    })?;
+    if run.suite_id != suite.suite_id {
+        bail!(
+            "benchmark-ci: run-results suite '{}' does not match selected suite '{}'",
+            run.suite_id,
+            suite.suite_id
+        );
+    }
 
     let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
     let gate_result = baloncore_core::benchmark_ci_gate(
@@ -9555,17 +9530,46 @@ fn resolve_suite(
 fn benchmark_determinism(
     suite_id: Option<String>,
     domain: Option<String>,
+    run_results: Vec<PathBuf>,
     k: usize,
     output: PathBuf,
     json: bool,
 ) -> Result<()> {
     let suite = resolve_suite(suite_id.as_deref(), domain.as_deref())?;
+    if run_results.len() != k {
+        bail!(
+            "benchmark-determinism: --k={} but {} --run-results paths supplied.",
+            k,
+            run_results.len()
+        );
+    }
+    let mut runs = Vec::new();
+    for path in &run_results {
+        if !path.exists() {
+            bail!(
+                "benchmark-determinism: run-results path {} does not exist",
+                path.display()
+            );
+        }
+        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
+            anyhow::anyhow!("failed to load run {}: {}", path.display(), e)
+        })?;
+        if run.suite_id != suite.suite_id {
+            bail!(
+                "benchmark-determinism: run {} suite '{}' != selected '{}'",
+                path.display(),
+                run.suite_id,
+                suite.suite_id
+            );
+        }
+        runs.push(run);
+    }
 
     println!(
-        "Running determinism check: {} runs on suite {}",
+        "Comparing {} REAL runs of suite {}",
         k, suite.suite_id
     );
-    let result = baloncore_core::verify_determinism(&suite, k);
+    let result = baloncore_core::verify_determinism(&suite, &runs);
 
     ensure_parent_dir(&output)?;
     baloncore_core::save_determinism_check(&result, &output)
@@ -9591,20 +9595,46 @@ fn benchmark_determinism(
 fn benchmark_repetition(
     suite_id: Option<String>,
     domain: Option<String>,
+    run_results: Vec<PathBuf>,
     k: usize,
     output: PathBuf,
     json: bool,
 ) -> Result<()> {
     let suite = resolve_suite(suite_id.as_deref(), domain.as_deref())?;
 
+    if run_results.len() != k {
+        bail!(
+            "benchmark-repetition: --k={} but {} --run-results paths supplied. \
+             Provide exactly K real BenchmarkRun JSON files produced by independent scans.",
+            k,
+            run_results.len()
+        );
+    }
+
     println!(
-        "Running benchmark repetition: {} runs on suite {}",
+        "Loading {} REAL benchmark runs for suite {}",
         k, suite.suite_id
     );
     let mut runs = Vec::new();
-    for i in 1..=k {
-        let run = baloncore_core::generate_golden_baseline(&suite);
-        println!("  Run {}/{}: {}", i, k, run.run_id);
+    for (i, path) in run_results.iter().enumerate() {
+        if !path.exists() {
+            bail!(
+                "benchmark-repetition: run-results path {} does not exist",
+                path.display()
+            );
+        }
+        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
+            anyhow::anyhow!("Failed to load run {}: {}", path.display(), e)
+        })?;
+        if run.suite_id != suite.suite_id {
+            bail!(
+                "benchmark-repetition: run {} suite '{}' != selected '{}'",
+                path.display(),
+                run.suite_id,
+                suite.suite_id
+            );
+        }
+        println!("  Run {}/{}: {} ({})", i + 1, k, run.run_id, path.display());
         runs.push(run);
     }
 
@@ -9625,9 +9655,11 @@ fn benchmark_repetition(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_gate_cmd(
     suite_id: Option<String>,
     domain: Option<String>,
+    run_results: PathBuf,
     min_precision: f64,
     max_decoy_fp: usize,
     max_recall_drop: f64,
@@ -9636,7 +9668,26 @@ fn eval_gate_cmd(
     json: bool,
 ) -> Result<()> {
     let suite = resolve_suite(suite_id.as_deref(), domain.as_deref())?;
-    let run = baloncore_core::generate_golden_baseline(&suite);
+    if !run_results.exists() {
+        bail!(
+            "eval-gate: --run-results path {} does not exist. Provide a real BenchmarkRun JSON.",
+            run_results.display()
+        );
+    }
+    let run = baloncore_core::load_benchmark_run(&run_results).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to load run from {}: {}",
+            run_results.display(),
+            e
+        )
+    })?;
+    if run.suite_id != suite.suite_id {
+        bail!(
+            "eval-gate: run-results suite '{}' != selected '{}'",
+            run.suite_id,
+            suite.suite_id
+        );
+    }
 
     let (baseline_run, baseline_suite) = if let Some(ref baseline_path) = baseline {
         let br = baloncore_core::load_benchmark_run(baseline_path)
@@ -9677,13 +9728,53 @@ fn eval_gate_cmd(
     }
 }
 
-fn generate_methodology_doc_cmd(output: PathBuf, json: bool) -> Result<()> {
-    let suites = baloncore_core::all_benchmark_suites();
-    let runs: Vec<baloncore_core::BenchmarkRun> = suites
-        .iter()
-        .map(|s| baloncore_core::generate_golden_baseline(s))
-        .collect();
+/// Load real BenchmarkRun JSON files and align them with their suites by suite_id.
+/// Errors if any path is missing or any run does not match a registered suite.
+fn load_real_runs_for_doc(
+    cmd: &str,
+    paths: &[PathBuf],
+) -> Result<(
+    Vec<baloncore_core::BenchmarkSuite>,
+    Vec<baloncore_core::BenchmarkRun>,
+)> {
+    if paths.is_empty() {
+        bail!(
+            "{cmd}: --run-results requires at least one path to a real BenchmarkRun JSON. \
+             Produce one with a real scan first."
+        );
+    }
+    let mut suites = Vec::new();
+    let mut runs = Vec::new();
+    for path in paths {
+        if !path.exists() {
+            bail!("{cmd}: run-results path {} does not exist", path.display());
+        }
+        let run = baloncore_core::load_benchmark_run(path).map_err(|e| {
+            anyhow::anyhow!(
+                "{cmd}: failed to load run {}: {}",
+                path.display(),
+                e
+            )
+        })?;
+        let suite = baloncore_core::benchmark_suite_by_id(&run.suite_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{cmd}: run {} references unknown suite '{}'",
+                path.display(),
+                run.suite_id
+            )
+        })?;
+        suites.push(suite);
+        runs.push(run);
+    }
+    Ok((suites, runs))
+}
 
+fn generate_methodology_doc_cmd(
+    run_results: Vec<PathBuf>,
+    output: PathBuf,
+    json: bool,
+) -> Result<()> {
+    let (suites, runs) = load_real_runs_for_doc("generate-methodology-doc", &run_results)?;
     let doc = baloncore_core::generate_methodology_doc(&suites, &runs);
 
     ensure_parent_dir(&output)?;
@@ -9704,13 +9795,12 @@ fn generate_methodology_doc_cmd(output: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn generate_benchmark_doc_cmd(output: PathBuf, json: bool) -> Result<()> {
-    let suites = baloncore_core::all_benchmark_suites();
-    let runs: Vec<baloncore_core::BenchmarkRun> = suites
-        .iter()
-        .map(|s| baloncore_core::generate_golden_baseline(s))
-        .collect();
-
+fn generate_benchmark_doc_cmd(
+    run_results: Vec<PathBuf>,
+    output: PathBuf,
+    json: bool,
+) -> Result<()> {
+    let (suites, runs) = load_real_runs_for_doc("generate-benchmark-doc", &run_results)?;
     let doc = baloncore_core::generate_benchmark_doc(&suites, &runs);
 
     ensure_parent_dir(&output)?;
@@ -11701,5 +11791,125 @@ mod tests {
         let workflow = build_workflow_inventory(&endpoints);
         assert_eq!(json_u64(&workflow, &["summary", "workflow_families"]), 1);
         assert_eq!(json_u64(&workflow, &["summary", "transitions_total"]), 1);
+    }
+
+    // --- T0.a / T0.b regression tests -----------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §2 documented that benchmark-ci returned 100/100/100/A+
+    // without ever running a scan, because it called generate_golden_baseline as a
+    // silent fallback. These tests pin the "no real scan => error" contract so a
+    // future refactor cannot reintroduce the shortcut.
+
+    #[test]
+    fn benchmark_ci_errors_when_no_run_results_supplied() {
+        let workspace = test_workspace("benchmark-ci-no-results");
+        fs::create_dir_all(&workspace).unwrap();
+        let output = workspace.join("run.json");
+        let scorecard = workspace.join("sc.json");
+
+        let result = benchmark_ci(
+            Some("baloncore-web-api-v1".to_string()),
+            None,
+            None, // <-- no --run-results
+            output.clone(),
+            scorecard.clone(),
+            0.99,
+            0.99,
+            0.99,
+            0.99,
+            0.01,
+            true,
+        );
+        assert!(
+            result.is_err(),
+            "benchmark-ci with no --run-results MUST error; if it returns Ok the synthetic-fallback regression is back"
+        );
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("--run-results"),
+            "error message should tell the operator about --run-results, got: {err}"
+        );
+        assert!(
+            !output.exists(),
+            "benchmark-ci must NOT write a fake run.json when no real results were supplied"
+        );
+        assert!(
+            !scorecard.exists(),
+            "benchmark-ci must NOT write a fake scorecard.json when no real results were supplied"
+        );
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn benchmark_ci_errors_when_run_results_path_missing() {
+        let workspace = test_workspace("benchmark-ci-missing-path");
+        fs::create_dir_all(&workspace).unwrap();
+        let bogus = workspace.join("does-not-exist.json");
+        let output = workspace.join("run.json");
+        let scorecard = workspace.join("sc.json");
+
+        let result = benchmark_ci(
+            Some("baloncore-web-api-v1".to_string()),
+            None,
+            Some(bogus.clone()),
+            output.clone(),
+            scorecard.clone(),
+            0.99,
+            0.99,
+            0.99,
+            0.99,
+            0.01,
+            true,
+        );
+        assert!(
+            result.is_err(),
+            "benchmark-ci with a non-existent run-results path MUST error"
+        );
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("does not exist"),
+            "error should reference the missing path, got: {err}"
+        );
+        assert!(!output.exists());
+        assert!(!scorecard.exists());
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn evaluate_benchmark_webapi_errors_when_matrix_summary_missing() {
+        // T0.b: with no matrix_summary.json under --run-dir, evaluate-benchmark
+        // must fail loudly. Previously it silently called run_ground_truth_baseline
+        // (which copied ground_truth as the prediction).
+        let workspace = test_workspace("eval-bench-missing-matrix");
+        fs::create_dir_all(&workspace).unwrap();
+        let run_dir = workspace.join("scan-run-empty");
+        fs::create_dir_all(&run_dir).unwrap();
+        let output = workspace.join("eval_run.json");
+        let scorecard = workspace.join("eval_sc.json");
+
+        let result = evaluate_benchmark(
+            Some("baloncore-web-api-v1".to_string()),
+            None,
+            Some(run_dir.clone()),
+            None,
+            output.clone(),
+            scorecard.clone(),
+            true,
+        );
+        assert!(
+            result.is_err(),
+            "evaluate-benchmark (web_api) with no matrix_summary.json MUST error"
+        );
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("matrix_summary.json"),
+            "error should reference the missing artifact, got: {err}"
+        );
+        assert!(!output.exists());
+        assert!(!scorecard.exists());
+
+        let _ = fs::remove_dir_all(&workspace);
     }
 }

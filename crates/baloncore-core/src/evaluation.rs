@@ -1789,7 +1789,13 @@ pub struct DeterminismCheckResult {
     pub details: String,
 }
 
-pub fn verify_determinism(suite: &BenchmarkSuite, k: usize) -> DeterminismCheckResult {
+/// Verify whether K independently-produced runs of the same suite are score-identical.
+///
+/// Callers MUST supply real `BenchmarkRun`s produced by independent scans of the
+/// same target. Comparing synthetic ground-truth echoes against themselves is
+/// meaningless and would always pass.
+pub fn verify_determinism(suite: &BenchmarkSuite, runs: &[BenchmarkRun]) -> DeterminismCheckResult {
+    let k = runs.len();
     if k < 2 {
         return DeterminismCheckResult {
             check_id: format!(
@@ -1813,15 +1819,12 @@ pub fn verify_determinism(suite: &BenchmarkSuite, k: usize) -> DeterminismCheckR
         };
     }
 
-    let mut runs: Vec<BenchmarkRun> = Vec::new();
     let mut metrics_list: Vec<EvaluationMetrics> = Vec::new();
     let mut json_blobs: Vec<String> = Vec::new();
 
-    for _i in 0..k {
-        let run = generate_golden_baseline(suite);
-        let metrics = compute_evaluation_metrics(suite, &run);
-        let json = serde_json::to_string(&run).unwrap_or_default();
-        runs.push(run);
+    for run in runs {
+        let metrics = compute_evaluation_metrics(suite, run);
+        let json = serde_json::to_string(run).unwrap_or_default();
         metrics_list.push(metrics);
         json_blobs.push(json);
     }
@@ -4124,6 +4127,21 @@ pub fn create_benchmark_run_from_results(
     }
 }
 
+/// **SYNTHETIC TEST FIXTURE — DOES NOT MEASURE ANY REAL SYSTEM CAPABILITY.**
+///
+/// Returns a `BenchmarkRun` whose every `prediction` is copied from the case's
+/// `ground_truth`. Scoring this run against the suite necessarily yields perfect
+/// precision, recall, and F1 — by construction, not by measurement.
+///
+/// This exists only so the scoring math in `compute_evaluation_metrics`,
+/// `generate_scorecard`, `compare_runs`, `compute_repetition_stats`, and
+/// `verify_determinism` can be unit-tested against a known-perfect input.
+///
+/// **NEVER call this from the CLI, the API, or any docs-generation path.**
+/// Every production score must come from a real scan's artifacts via
+/// `load_benchmark_run`. See `docs/VERIFICATION/V0_GROUND_TRUTH.md` §2 for the
+/// reasoning.
+#[doc(hidden)]
 pub fn generate_golden_baseline(suite: &BenchmarkSuite) -> BenchmarkRun {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5542,35 +5560,33 @@ mod p2s5_tests {
     use super::*;
 
     #[test]
-    fn determinism_check_two_runs_identical_scores() {
+    fn determinism_check_two_identical_runs() {
         let suite = web_api_benchmark_suite();
-        let result = verify_determinism(&suite, 2);
+        let r1 = generate_golden_baseline(&suite);
+        let r2 = generate_golden_baseline(&suite);
+        let result = verify_determinism(&suite, &[r1, r2]);
         assert!(
             result.scores_identical,
-            "Two golden baseline runs should produce identical scores"
-        );
-        assert!(
-            result.byte_identical_json || result.scores_identical,
-            "Scores should be identical even if run IDs differ"
+            "Two identical synthetic runs should score-identical (sanity check)"
         );
         assert_eq!(result.runs_compared, 2);
     }
 
     #[test]
-    fn determinism_check_three_runs_identical_scores() {
+    fn determinism_check_three_identical_runs() {
         let suite = cloud_iam_benchmark_suite();
-        let result = verify_determinism(&suite, 3);
-        assert!(
-            result.scores_identical,
-            "Three golden baseline runs should produce identical scores"
-        );
+        let runs: Vec<BenchmarkRun> =
+            (0..3).map(|_| generate_golden_baseline(&suite)).collect();
+        let result = verify_determinism(&suite, &runs);
+        assert!(result.scores_identical);
         assert_eq!(result.runs_compared, 3);
     }
 
     #[test]
     fn determinism_check_insufficient_runs() {
         let suite = web_api_benchmark_suite();
-        let result = verify_determinism(&suite, 1);
+        let r1 = generate_golden_baseline(&suite);
+        let result = verify_determinism(&suite, &[r1]);
         assert!(!result.scores_identical, "1 run cannot be compared");
         assert_eq!(result.runs_compared, 0);
         assert!(result.details.contains("at least 2"));
@@ -5579,12 +5595,59 @@ mod p2s5_tests {
     #[test]
     fn determinism_render_produces_markdown() {
         let suite = web_api_benchmark_suite();
-        let result = verify_determinism(&suite, 2);
+        let r1 = generate_golden_baseline(&suite);
+        let r2 = generate_golden_baseline(&suite);
+        let result = verify_determinism(&suite, &[r1, r2]);
         let md = render_determinism_check(&result);
         assert!(md.contains("Determinism Check"));
         assert!(md.contains("Scores Identical"));
         assert!(md.contains("Byte-Identical JSON"));
         assert!(md.contains("baseline"));
+    }
+
+    #[test]
+    fn determinism_check_detects_non_determinism() {
+        // Mutation check: two different real-shaped runs must produce scores_identical = false.
+        let suite = web_api_benchmark_suite();
+        let r_good = generate_golden_baseline(&suite);
+        // Synthesize a "bad" run where every case is a false negative.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let bad_results: Vec<BenchmarkResult> = suite
+            .cases
+            .iter()
+            .map(|case| BenchmarkResult {
+                result_id: format!("result_{}", case.case_id),
+                suite_id: suite.suite_id.clone(),
+                case_id: case.case_id.clone(),
+                domain: case.domain.clone(),
+                actual_classification: None,
+                actual_severity: None,
+                actual_state: Some("missed".to_string()),
+                prediction: GroundTruthLabel::FalseNegative,
+                confidence: 0.0,
+                evidence_found: vec![],
+                time_to_result_ms: 0,
+                error: Some("simulated mismatch".to_string()),
+            })
+            .collect();
+        let r_bad = BenchmarkRun {
+            run_id: "bad".to_string(),
+            suite_id: suite.suite_id.clone(),
+            suite_version: suite.version.clone(),
+            domain: suite.domain.clone(),
+            started_at: now,
+            completed_at: now,
+            config_snapshot: BenchmarkConfig::default(),
+            results: bad_results,
+        };
+        let result = verify_determinism(&suite, &[r_good, r_bad]);
+        assert!(
+            !result.scores_identical,
+            "verify_determinism must detect score divergence; if this passes the check is broken"
+        );
     }
 
     #[test]
@@ -5675,7 +5738,9 @@ mod p2s5_tests {
     #[test]
     fn save_and_load_determinism_check() {
         let suite = web_api_benchmark_suite();
-        let result = verify_determinism(&suite, 2);
+        let r1 = generate_golden_baseline(&suite);
+        let r2 = generate_golden_baseline(&suite);
+        let result = verify_determinism(&suite, &[r1, r2]);
         let dir = std::env::temp_dir().join("baloncore-determinism-test");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("determinism.json");
