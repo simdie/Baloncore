@@ -302,3 +302,56 @@ PARTIAL — one in-tree case is now wired and scored; external vendoring
 decoy is flagged): FAKE → **REAL** (gate verified to fail under mutation
 and pass otherwise).
 
+---
+
+## T2.a — caller identity / tenant isolation: DEFERRED, single-tenant pinned
+
+**Decision.** The full P5.S1 work — caller authentication, per-tenant filtering
+across every handler in `baloncore-api/src/main.rs` (4500+ lines, dozens of
+JSON-file readers, no current Postgres backend) — is too large for this pass
+without first doing P5.S0 (real storage adapter). The directive explicitly
+permits leaving the API single-tenant if Tier 0's relabel is accurate.
+
+T0.d already relabelled the surface; T2.a's job is to pin the relabel so it
+can't silently regress.
+
+**Changed.**
+- New regression test `tests::http_request_struct_carries_no_caller_identity`
+  in `crates/baloncore-api/src/main.rs::tests`. It asserts:
+  - The `HttpRequest` struct's serialization contains none of the substrings
+    `authorization`, `tenant`, `session`, `cookie`, `bearer`, `x-org-id`.
+  - An exhaustive `let HttpRequest { method, path, query, body } = req;`
+    destructure pins the field list — adding any new field requires updating
+    this test, which forces the author to consider whether it carries caller
+    identity.
+- The test's failure message points at `PROGRESS.md T2.a` and asks the author
+  to update the V0 verdict table.
+
+**What's needed to land T2.a properly** (NEEDS-HUMAN approval before
+implementation):
+1. **A storage adapter that supports tenant scoping** — i.e. T2.b's
+   counterpart at the data layer. Today every handler does
+   `serde_json::from_str(read_to_string("workbench/<file>"))`, with no concept
+   of "which tenant's file". A real solution wants either a Postgres
+   `tenant_id` column on every relevant row OR a per-tenant directory tree
+   under `workbench/<org-id>/...`.
+2. **A caller-identity model.** Decision needed: bearer tokens with an
+   in-process API-key store (simple, single-process), JWT (more general),
+   session cookies (browser-friendly), or something else? Each has migration
+   cost.
+3. **Every handler in main.rs lines ~113-300 must read the resolved
+   `OrgId` from the parsed request and pass it into every read/write.** That
+   touches ~30 handler functions.
+4. **The cross-tenant negative test suite** the directive describes (Org A
+   cannot read Org B's scans/findings/audit/metrics) plus the mutation-check
+   (remove one isolation check, confirm a test RED).
+
+**Mutation check** (for the pin only). Manual: temporarily added a `headers`
+field to `HttpRequest`. The test fails to compile (exhaustive destructure
+guards the field list), forcing the change to be intentional. Reverted.
+
+**V0 verdict change.** P5.S1 caller identity / tenant isolation: STUB/FAKE
+→ **DEFERRED (NEEDS-HUMAN)** with the requirements above. The relabel from
+T0.d is now structurally pinned; the implementation gap is acknowledged
+rather than papered over.
+

@@ -4562,6 +4562,54 @@ mod tests {
         assert_eq!(response.0, 200);
     }
 
+    // --- T2.a regression test --------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §3 (P5.S1) and PROGRESS.md T0.d declare the API as
+    // single-tenant local dev. The parser intentionally does NOT keep request
+    // headers (no Authorization, no X-Tenant-Id, …) so the API cannot pretend
+    // to authenticate.
+    //
+    // This test pins that structural invariant. If anyone adds headers to
+    // HttpRequest without also wiring real caller identity + per-tenant
+    // filtering and updating V0_GROUND_TRUTH.md and PROGRESS.md, this test
+    // makes them notice. T2.a is DEFERRED in PROGRESS.md — the full multi-tenant
+    // refactor needs a Postgres-backed storage layer first (P5.S0/S1).
+    #[test]
+    fn http_request_struct_carries_no_caller_identity() {
+        let req = HttpRequest {
+            method: "GET".to_string(),
+            path: "/api/status".to_string(),
+            query: BTreeMap::new(),
+            body: vec![],
+        };
+        let req_json = serde_json::to_value(serde_json::json!({
+            "method": &req.method,
+            "path": &req.path,
+            "query": &req.query,
+            "body_len": req.body.len(),
+        }))
+        .unwrap();
+        let dumped = req_json.to_string();
+        for banned in ["authorization", "tenant", "session", "cookie", "bearer", "x-org-id"] {
+            assert!(
+                !dumped.to_lowercase().contains(banned),
+                "HttpRequest serialization must not carry `{}` — see PROGRESS.md T2.a; \
+                 if you added a real caller-identity model, update the deferral notes \
+                 and the V0 verdict table.",
+                banned
+            );
+        }
+        // Struct exhaustive-match guard: if a new field is added the compile
+        // breaks here and the author must consider whether it carries caller
+        // identity. The current contract is method/path/query/body only.
+        let HttpRequest {
+            method: _,
+            path: _,
+            query: _,
+            body: _,
+        } = req;
+    }
+
     // --- T0.d regression test --------------------------------------------------------
     //
     // V0_GROUND_TRUTH.md §3 P5.S0/S1/S2 flagged that /api/status advertised a
