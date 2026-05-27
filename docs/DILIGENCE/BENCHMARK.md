@@ -1,139 +1,134 @@
 # BALONCORE Benchmark — Diligence Documentation
 
-## Executive Summary
+## RETRACTION — read this first
 
-BALONCORE's security validation accuracy is measured against hand-labeled ground truth with deterministic reproducibility. Every claim in this document is verifiable by a single command.
+A previous version of this document published a one-command "100% precision /
+100% recall / A+" headline for all four benchmark suites. That headline was a
+tautology: the `benchmark-ci` CLI silently called an internal helper
+(`generate_golden_baseline`) that copied each case's `ground_truth` into the
+`prediction` field, then graded that against the same ground truth. No scan
+was ever executed. The numbers measured nothing.
 
-## Verification Command
+The audit that uncovered this is in
+[`docs/VERIFICATION/V0_GROUND_TRUTH.md`](../VERIFICATION/V0_GROUND_TRUTH.md) §2.
+The shortcut has been removed (`docs/VERIFICATION/PROGRESS.md` T0.a/T0.b), and
+the CLI now refuses to produce a score without real run artifacts.
+
+**Retracted claims (do not reuse anywhere):**
+
+- 100 % precision, 100 % recall, 100 % F1, grade A+ on any BALONCORE benchmark
+  suite.
+- "The numbers in this document match the latest scorecard generated from the
+  golden baseline" — the golden baseline was a synthetic fixture for unit-testing
+  the scoring math, not a measurement of any system capability.
+- "Eval gate passes on every PR" framing for the CI gate as it stood — the gate
+  passed because the synthetic input always passed; a deliberately broken
+  validator would not have changed the score.
+
+---
+
+## What is currently measurable, end-to-end (honest baseline)
+
+These are real today, against in-tree local labs only. There is no externally
+authored corpus yet (`docs/VERIFICATION/V0_GROUND_TRUTH.md` §4.3).
+
+| What | Where to reproduce | What it proves |
+|---|---|---|
+| **Verified cross-tenant BOLA on `labs/vulnerable-saas`** | Start the lab (`node labs/vulnerable-saas/server.js`), then `cargo run -p baloncore -- scan-openapi-bola --base-url http://127.0.0.1:3010 --openapi-url http://127.0.0.1:3010/openapi.json --owner-profile org_b_member` (with a config defining the org_a_* / org_b_* profiles). Inspect `<run-dir>/matrix_summary.json` for an `org-a` member proving cross-tenant access to `org-b` `proj-b-001`. | Real HTTP traffic to a planted bug, sealed evidence written to disk. |
+| **Decoy rejection on `proj-b-secret`** | Same lab. The same scan must NOT flag `org-a` member requests to `proj-b-secret` (it is correctly 403'd). | Decoy discipline against a planted-but-properly-blocked endpoint. |
+| **Bearer-token redaction before any provider call** | Unit tests `redact_for_model_removes_bearer_tokens`, `…_emails`, `…_passwords` in `crates/baloncore-core/src/agent_runtime.rs::tests`; plus the fail-closed guard in `run_live_agent` at the same file. | Secrets are replaced with placeholders before serialization into a model request; `run_live_agent` aborts with a `Skipped` output if a known secret marker survives. |
+| **Firewall pre-filter** | Tests `live_pipeline_false_hypothesis_is_not_promoted_to_verified` and `live_pipeline_true_hypothesis_is_promoted` in `crates/baloncore-core/src/agent_runtime.rs::tests`. | A vague/no-endpoint/no-evidence hypothesis is blocked before validator bridging; a well-formed one is bridged. (See T1.a in PROGRESS.md for the live-validator extension of this test.) |
+| **Strict JSON repair + budgets** | Tests `parse_*`, `*_repair`, `model_budget_*` in the same module. | Malformed model output triggers exactly one repair attempt, then `Skipped`; budget exhaustion aborts before any model call. |
+| **Scoring math (unit-tested in isolation)** | `compute_evaluation_metrics`, `generate_scorecard`, `compare_runs`, `verify_determinism` exhaustive unit tests in `crates/baloncore-core/src/evaluation.rs`. | The math itself (precision/recall/F1/FPR/per-difficulty-weighted accuracy) computes the right values from any `BenchmarkRun` you hand it. The math is real; what was missing was a real input. |
+
+Headline numbers from real scans of the in-tree labs will be added back to this
+document once T1.b (the real benchmark runner that brings up `vulnerable-saas`,
+scans it, and scores the produced `matrix_summary.json` against a hand-labeled
+`ground_truth.json`) is complete.
+
+## How to produce a real benchmark run today (manual path)
+
+The CLI now refuses to score without real artifacts. The minimal manual path:
 
 ```bash
-git clone <repo> && cd Baloncore
-cargo build --release -p baloncore
-./scripts/run_benchmarks.sh --check-determinism --fail-on-regression
+# 1. start the lab
+node labs/vulnerable-saas/server.js &
+
+# 2. run the real scan to produce matrix_summary.json
+cargo run -p baloncore -- scan-openapi-bola \
+  --base-url http://127.0.0.1:3010 \
+  --openapi-url http://127.0.0.1:3010/openapi.json \
+  --owner-profile org_b_member \
+  --out-dir .baloncore/runs/saas-bench
+
+# 3. score it
+cargo run -p baloncore -- evaluate-benchmark \
+  --suite baloncore-web-api-v1 \
+  --run-dir .baloncore/runs/saas-bench
+
+# 4. (optional) gate it
+cargo run -p baloncore -- benchmark-ci \
+  --suite baloncore-web-api-v1 \
+  --run-results .baloncore/runs/saas-bench/scorecard.json
 ```
 
-This single command builds BALONCORE, runs all 4 benchmark suites, verifies determinism (K=2 identical runs), and exits nonzero if any suite regresses below configurable thresholds.
+If step 2 is skipped, steps 3 and 4 will error with an explicit "produce real
+scan artifacts first" message instead of producing a number.
 
-## What We Measure
+## Scoring methodology (unchanged; the math is real)
 
-BALONCORE measures **security validation accuracy** — not whether a vulnerability exists (which is determined by ground truth labeling), but whether the system correctly identifies, classifies, and provides evidence for each finding.
-
-The four measured outcomes per case:
-
-| Outcome | Meaning |
-|---------|---------|
-| True Positive | Real vulnerability correctly identified |
-| True Negative | Benign or intended access correctly NOT flagged |
-| False Positive | Benign behavior incorrectly flagged as a vulnerability |
-| False Negative | Real vulnerability missed |
-| Inconclusive | Insufficient evidence to make a determination |
-
-**Decoy cases** are planted traps: scenarios that look like vulnerabilities but are not. Any decoy flagged as a True Positive is a false alarm that reveals over-eager detection.
-
-## Scoring Methodology
-
-### Primary Metrics
-
-| Metric | Formula | Why It Matters |
+| Metric | Formula | Why it matters |
 |--------|---------|----------------|
 | Precision | TP / (TP + FP) | Fraction of alerts that are real. Low precision = alert fatigue. |
 | Recall | TP / (TP + FN) | Fraction of real vulnerabilities found. Low recall = missed attacks. |
-| F1 | 2 * P * R / (P + R) | Balance between precision and recall. |
+| F1 | 2·P·R / (P+R) | Balance between precision and recall. |
 | Accuracy | (TP + TN) / Total | Overall correctness across all cases. |
-| FPR | FP / (FP + TN) | False alarm rate. Must trend to zero for production use. |
+| FPR | FP / (FP + TN) | False-alarm rate; must trend to 0 for production use. |
 | Decoy FP rate | Decoy TP / Total Decoys | Fraction of decoys incorrectly flagged. |
 
-### Difficulty Weighting
+Difficulty weighting (trivial 0.5×, basic 1×, moderate 2×, advanced 3×, expert 5×)
+is applied as before. The math is correct; only its production callers were lying.
 
-Not all cases are equally hard. BALONCORE weights accuracy by difficulty:
+## Suite descriptions (cases unchanged; runs are gated on real input)
 
-- **Trivial** (0.5x): Obvious single-step validations
-- **Basic** (1.0x): Standard vulnerability patterns
-- **Moderate** (2.0x): Multi-step reasoning required
-- **Advanced** (3.0x): Subtle or complex patterns
-- **Expert** (5.0x): Deep domain knowledge required
-
-This ensures headline numbers reflect real-world difficulty, not just easy cases.
-
-### Eval Gate Thresholds
-
-The CI gate enforces these minimum thresholds on every PR:
-
-| Threshold | Default | Rationale |
-|-----------|---------|-----------|
-| Precision | >= 70% | Less than 70% precision means >30% of alerts are false |
-| Decoy FP | = 0 | Any decoy hit reveals over-eager detection |
-| Recall drop | <= 10pp | Code changes should not regress recall by more than 10 percentage points |
-
-## Corpus Design
-
-### Web/API Suite (10 cases)
-
-Covers BOLA, BFLA, missing authentication, intended owner access, and blocked-as-expected scenarios across REST API endpoints.
-
-| Case | Ground Truth | Difficulty | Category |
-|------|-------------|------------|----------|
-| Owner accesses own invoice | TrueNegative | Trivial | Negative control |
-| Cross-user invoice (BOLA) | TruePositive | Basic | IDOR |
-| Non-admin admin report (BFLA) | TruePositive | Basic | BFLA |
-| Anonymous invoice access | TruePositive | Moderate | Missing auth |
-| Intended multi-tenant access | TrueNegative | Basic | Negative control |
-| BOLA with business data | TruePositive | Moderate | Sensitive data |
-| BFLA with privileged data | TruePositive | Advanced | Privilege escalation |
-| Rate-limited endpoint blocked | TrueNegative | Basic | Rate limiting |
-| BOLA on parameterized path | TruePositive | Advanced | Parameterized IDOR |
-| Admin endpoint properly blocked | TrueNegative | Trivial | Auth enforcement |
-
-### Cloud IAM Suite (5 cases)
-
-Covers overly permissive IAM policies, privilege escalation paths, and compliant policies.
-
-### Web3 Suite (5 cases)
-
-Covers reentrancy, access control, integer overflow, and compliant contract patterns.
-
-### Evidence Lifecycle Suite (4 cases)
-
-Covers verified findings, rejected hypotheses, evidence integrity failures, and lifecycle invalid states.
+- **Web/API suite** — 10 cases covering BOLA, BFLA, missing-auth, intended access, decoys.
+- **Cloud IAM suite** — 5 cases covering over-permissive IAM, privilege paths, compliant policies.
+- **Web3 suite** — 5 cases covering reentrancy, access control, integer overflow, compliant contracts.
+- **Evidence lifecycle suite** — 4 cases covering verified findings, rejected hypotheses, integrity failures, invalid lifecycle states.
 
 ## Determinism
 
-BALONCORE's fixture provider produces **byte-identical** results across repeated runs. This is enforced by a determinism test:
-
-```bash
-cargo run -p baloncore -- benchmark-determinism --suite baloncore-web-api-v1 --k 3
-```
-
-For live model providers, we report mean +/- stddev over K repetitions rather than a single sample.
+`benchmark-determinism` now takes K real `BenchmarkRun` JSON paths and asserts
+they are score-identical. It cannot be passed a synthetic baseline that
+trivially matches itself.
 
 ## Attribution
 
-Every benchmark run records:
+Every real benchmark run records: provider, model, prompt version, engine
+version, git commit, corpus hash. Synthetic fixture runs are not eligible.
 
-- **Provider**: fixture / anthropic / openai
-- **Model**: e.g., claude-sonnet-4-20250514, gpt-4
-- **Prompt version**: e.g., v1
-- **Engine version**: BALONCORE package version
-- **Git commit**: Source code version
-- **Corpus hash**: Hash of the benchmark suite for reproducibility
+## Limitations (now also honest)
 
-## Limitations
+1. **No externally authored corpus yet.** All evidence is against the in-tree
+   labs (`labs/vulnerable-api`, `labs/vulnerable-saas`, `labs/vulnerable-protocol`,
+   `labs/cloud-iam/aws-risky.json`). External corpus vendoring is NEEDS-HUMAN
+   pending `BALONCORE_BENCHMARK_CORPUS_TARGETS.md`.
+2. **24 hardcoded cases across 4 domains.** Not exhaustive of all vulnerability classes.
+3. **Live model results vary.** The eval reports mean ± stddev over K real runs (no synthetic determinism shortcut).
+4. **Ground truth is hand-labeled.** Reasonable professionals may disagree on edge cases.
+5. **No live cloud scanning.** Cloud IAM analysis is offline static analysis.
+6. **Local targets only.** Production behavior may differ.
+7. **No timing guarantees.** Relative comparisons only.
+8. **Decoy coverage is limited.** Does not cover all FP scenarios.
+9. **Headline numbers retracted pending T1.b.** See top of this document.
 
-See `benchmarks/METHODOLOGY.md` for a complete limitations section. Key points:
+## Reproduction (revised)
 
-1. **24 cases** across 4 domains — not exhaustive of all vulnerability classes
-2. **Fixture results are deterministic** — live model results vary
-3. **Ground truth is hand-labeled** — reasonable professionals may disagree on edge cases
-4. **Local targets only** — production behavior may differ
-5. **No timing guarantees** — relative comparisons only
-6. **Decoy coverage is limited** — does not cover all FP scenarios
+1. Clone the repo, install Rust (stable).
+2. Bring up `labs/vulnerable-saas` (or another in-tree lab).
+3. Run the real scan (`scan-openapi-bola` or equivalent).
+4. Score with `evaluate-benchmark --run-dir <real-scan-dir>`.
+5. Gate with `benchmark-ci --suite … --run-results <real-run.json>`.
 
-## Reproduction Steps
-
-1. Clone the repository
-2. Install Rust (stable)
-3. Run: `./scripts/run_benchmarks.sh --check-determinism --fail-on-regression`
-4. Verify: all 4 suites pass, determinism check passes, eval gate passes
-5. Generate leaderboard: `cargo run -p baloncore -- leaderboard --runs <run_files...>`
-
-The numbers in this document match the latest scorecard generated from the golden baseline.
+No step in this pipeline accepts synthetic input. If any step is omitted, the
+next will error.

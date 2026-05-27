@@ -1,14 +1,42 @@
 # BALONCORE Benchmark Methodology
 
+## RETRACTION — read this first
+
+A previous version of this document recommended
+`benchmark-ci --suite … --save-golden --json` as a one-command reproduction.
+That command produced a 100 %-by-construction tautology — it copied each case's
+`ground_truth` into the `prediction` field and graded that against the same
+ground truth. The shortcut has been removed (see
+[`docs/VERIFICATION/V0_GROUND_TRUTH.md`](../docs/VERIFICATION/V0_GROUND_TRUTH.md) §2
+and [`docs/VERIFICATION/PROGRESS.md`](../docs/VERIFICATION/PROGRESS.md) T0.a/T0.b).
+
+The CLI now refuses to score without real run artifacts. Any reproduction must
+bring up a real target (start with `labs/vulnerable-saas`), run a real scan,
+and pass the produced `BenchmarkRun` JSON to the gate.
+
 ## Overview
 
-BALONCORE evaluates security validation accuracy using deterministic benchmark suites with hand-labeled ground truth. Every finding in a BALONCORE benchmark has a known ground-truth label, enabling precise measurement of true positives, false positives, true negatives, and false negatives.
+BALONCORE evaluates security validation accuracy using benchmark suites with
+hand-labeled ground truth. The scoring math (precision, recall, F1, FPR,
+weighted accuracy, decoy FP rate) operates on `BenchmarkRun` artifacts produced
+by real scans of authorized targets.
 
-**One-command reproduction:**
+**Reproduction (manual; the runner is T1.b in PROGRESS.md):**
 
 ```bash
-cargo run -p baloncore -- benchmark-ci --suite baloncore-web-api-v1 --save-golden --json
+node labs/vulnerable-saas/server.js &
+cargo run -p baloncore -- scan-openapi-bola \
+  --base-url http://127.0.0.1:3010 \
+  --openapi-url http://127.0.0.1:3010/openapi.json \
+  --owner-profile org_b_member \
+  --out-dir .baloncore/runs/saas-bench
+cargo run -p baloncore -- evaluate-benchmark \
+  --suite baloncore-web-api-v1 \
+  --run-dir .baloncore/runs/saas-bench
 ```
+
+If the scan step is omitted, `evaluate-benchmark` and `benchmark-ci` will both
+error with a "produce real scan artifacts first" message.
 
 ## Corpus
 
@@ -87,42 +115,61 @@ All benchmark targets are local, intentionally-vulnerable lab applications:
 
 No external hosts are contacted during evaluation. The runner enforces scope authorization before any request.
 
-## Reproduction
+## Reproduction (gated on real run artifacts)
+
+All of the commands below require a real `BenchmarkRun` JSON produced by an
+actual scan. There is no `--save-golden` synthetic shortcut any more.
 
 ### Single suite
 
 ```bash
-cargo run -p baloncore -- benchmark-ci --suite baloncore-web-api-v1 --save-golden --json
+# 1. produce a real run (example: SaaS lab)
+node labs/vulnerable-saas/server.js &
+cargo run -p baloncore -- scan-openapi-bola \
+  --base-url http://127.0.0.1:3010 \
+  --openapi-url http://127.0.0.1:3010/openapi.json \
+  --owner-profile org_b_member \
+  --out-dir .baloncore/runs/saas-bench
+
+# 2. score it
+cargo run -p baloncore -- evaluate-benchmark \
+  --suite baloncore-web-api-v1 \
+  --run-dir .baloncore/runs/saas-bench
+
+# 3. (optional) gate it
+cargo run -p baloncore -- benchmark-ci \
+  --suite baloncore-web-api-v1 \
+  --run-results .baloncore/runs/saas-bench/benchmark_run.json
 ```
 
-### All suites with CI gate
+### Determinism verification (K independent real runs)
 
 ```bash
-./scripts/run_benchmarks.sh --check-determinism --fail-on-regression
+cargo run -p baloncore -- benchmark-determinism \
+  --suite baloncore-web-api-v1 \
+  --k 3 \
+  --run-results run1.json run2.json run3.json
 ```
 
-### Determinism verification
+### Eval gate (real run required)
 
 ```bash
-cargo run -p baloncore -- benchmark-determinism --suite baloncore-web-api-v1 --k 3
+cargo run -p baloncore -- eval-gate \
+  --suite baloncore-web-api-v1 \
+  --run-results .baloncore/runs/saas-bench/benchmark_run.json \
+  --min-precision 0.70 --max-decoy-fp 0 --max-recall-drop 0.10
 ```
 
-### Eval gate (precision >= 70%, decoy FP = 0, recall drop <= 10pp)
+### Leaderboard generation (real runs only)
 
 ```bash
-cargo run -p baloncore -- eval-gate --suite baloncore-web-api-v1 --min-precision 0.70 --max-decoy-fp 0 --max-recall-drop 0.10
+cargo run -p baloncore -- leaderboard --runs run1.json run2.json ...
 ```
 
-### Leaderboard generation
+### Cross-domain correlation (real runs only)
 
 ```bash
-cargo run -p baloncore -- leaderboard --runs .baloncore/benchmark/golden/golden_WebApi_run.json .baloncore/benchmark/golden/golden_CloudIam_run.json
-```
-
-### Cross-domain correlation
-
-```bash
-cargo run -p baloncore -- cross-domain --runs <run1.json> <run2.json> <run3.json> <run4.json>
+cargo run -p baloncore -- cross-domain --runs run1.json run2.json run3.json run4.json
 ```
 
 ## Limitations
@@ -139,18 +186,20 @@ cargo run -p baloncore -- cross-domain --runs <run1.json> <run2.json> <run3.json
 
 6. **Decoy coverage**: Decoy cases test false-positive discipline but do not cover all false-positive scenarios a production scanner would encounter.
 
-## Headline Numbers
+## Headline Numbers — RETRACTED
 
-<!-- BALONCORE_HEADLINE_START -->
-<!-- These numbers are generated by: cargo run -p baloncore -- leaderboard -->
-<!-- Regenerate with benchmark suite golden baselines -->
+The numbers previously published here were a tautology (see the retraction at
+the top of this file and `docs/VERIFICATION/V0_GROUND_TRUTH.md` §2). They have
+been removed and will only be reinstated when the real benchmark runner (T1.b
+in `docs/VERIFICATION/PROGRESS.md`) produces them from a real scan of an
+authorized target.
 
 | Domain | Accuracy | Precision | Recall | F1 | Grade |
 |--------|----------|-----------|--------|----|-------|
-| WebApi | 100.0% | 100.0% | 100.0% | 100.0% | A+ |
-| CloudIam | 100.0% | 100.0% | 100.0% | 100.0% | A+ |
-| Web3 | 100.0% | 100.0% | 100.0% | 100.0% | A+ |
-| Evidence | 100.0% | 100.0% | 100.0% | 100.0% | A+ |
+| WebApi | RETRACTED | RETRACTED | RETRACTED | RETRACTED | RETRACTED |
+| CloudIam | RETRACTED | RETRACTED | RETRACTED | RETRACTED | RETRACTED |
+| Web3 | RETRACTED | RETRACTED | RETRACTED | RETRACTED | RETRACTED |
+| Evidence | RETRACTED | RETRACTED | RETRACTED | RETRACTED | RETRACTED |
 
-**Overall: A+ (fixture provider, golden baseline)**
-<!-- BALONCORE_HEADLINE_END -->
+**Overall: NOT YET MEASURED against any real target. Do not quote a headline
+number from BALONCORE until T1.b is complete.**

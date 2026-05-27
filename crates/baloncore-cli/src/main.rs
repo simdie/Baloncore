@@ -11877,6 +11877,44 @@ mod tests {
         let _ = fs::remove_dir_all(&workspace);
     }
 
+    // --- T0.e regression test --------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §2 documented that docs/DILIGENCE/BENCHMARK.md and
+    // benchmarks/METHODOLOGY.md published a 100/100/100/A+ headline that was
+    // produced by a tautological scoring path. This guard prevents the headline
+    // from being reintroduced into either doc.
+    #[test]
+    fn diligence_and_methodology_docs_do_not_reissue_retracted_headlines() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .expect("repo root resolvable from CARGO_MANIFEST_DIR");
+        for doc_rel in ["docs/DILIGENCE/BENCHMARK.md", "benchmarks/METHODOLOGY.md"] {
+            let doc_path = repo_root.join(doc_rel);
+            let body = fs::read_to_string(&doc_path)
+                .unwrap_or_else(|e| panic!("read {}: {}", doc_path.display(), e));
+            let banned_cells = [
+                "| 100.0% | 100.0% | 100.0% | 100.0% | A+ |",
+                "Overall: A+ (fixture provider, golden baseline)",
+            ];
+            for banned in banned_cells {
+                assert!(
+                    !body.contains(banned),
+                    "{}: must not contain retracted headline cell `{}`; \
+                     see docs/VERIFICATION/V0_GROUND_TRUTH.md §2 and PROGRESS.md T0.e.",
+                    doc_rel,
+                    banned
+                );
+            }
+            assert!(
+                body.contains("RETRACT"),
+                "{}: must contain a RETRACTION marker citing V0 §2",
+                doc_rel
+            );
+        }
+    }
+
     #[test]
     fn evaluate_benchmark_webapi_errors_when_matrix_summary_missing() {
         // T0.b: with no matrix_summary.json under --run-dir, evaluate-benchmark

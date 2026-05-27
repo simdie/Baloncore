@@ -142,3 +142,39 @@ overclaim) → RED. Restored → GREEN. Tests: 20 + 16 + 505 passing.
 is still single-tenant — that's exactly what the label now says). P5.S3 worker
 reclaim overclaim: NOW HONEST.
 
+---
+
+## T0.e — retract the 100/A+ headline from the diligence + methodology docs
+
+**Changed.**
+- `docs/DILIGENCE/BENCHMARK.md` rewritten. The new top section is a RETRACTION
+  that explicitly states the previous 100/100/100/A+ headline was a tautology
+  and points at V0 §2 and PROGRESS T0.a/T0.b. The doc now lists "what is
+  currently measurable, end-to-end (honest baseline)" — verified cross-tenant
+  BOLA + decoy rejection on `labs/vulnerable-saas`, bearer redaction, the
+  firewall pre-filter — and gives a manual reproduction path that requires a
+  real scan before any score can be produced.
+- `benchmarks/METHODOLOGY.md` similarly gains a RETRACTION header. The
+  "One-command reproduction" snippet is removed; the reproduction sections are
+  rewritten to require `--run-results <path>` and explicitly note "There is no
+  `--save-golden` synthetic shortcut any more." The "Headline Numbers" table
+  cells are all replaced with `RETRACTED`.
+- `scripts/run_benchmarks.sh` is converted into an error-and-explain shim: it
+  exits 2 with a message pointing at the manual path and T1.b. The fabricated
+  one-line success path is no longer available.
+
+**Tests added.**
+`diligence_and_methodology_docs_do_not_reissue_retracted_headlines` (in the CLI
+test module) opens both docs and asserts:
+- Neither contains the literal cell `| 100.0% | 100.0% | 100.0% | 100.0% | A+ |`
+  nor the line `Overall: A+ (fixture provider, golden baseline)`.
+- Each contains a `RETRACT…` marker.
+
+**Mutation check.** Appended the banned headline cell back into
+`benchmarks/METHODOLOGY.md` → RED (`diligence_and_methodology_docs_do_not_reissue_retracted_headlines ... FAILED`).
+Restored → GREEN.
+
+**V0 verdict change.** P2.S7 "diligence-facing benchmark doc": MISLEADING →
+HONEST. The doc now correctly says "do not quote a headline number from
+BALONCORE until T1.b is complete."
+
