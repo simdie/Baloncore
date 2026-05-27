@@ -10844,10 +10844,143 @@ fn export_flagship_report(
                 println!("{}", md);
             }
         }
-        other => bail!("unsupported format '{}'; use 'html' or 'markdown'", other),
+        "pdf" => {
+            // T3.b — real PDF render. Pipeline: render the report HTML to a
+            // temp file, then invoke wkhtmltopdf / Chromium with --print-to-pdf
+            // against that file. NO synthesis path: we ONLY render the
+            // FlagshipReport that was built from the run-dir artifacts; we do
+            // not fabricate findings. If no PDF binary is available the
+            // command errors with an explicit install hint.
+            let pdf_output = output.ok_or_else(|| {
+                anyhow::anyhow!("--format pdf requires --output <path.pdf>")
+            })?;
+            let html = report.to_html();
+            let parent = pdf_output.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+            fs::create_dir_all(&parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+            let html_temp = parent.join(format!(
+                ".flagship-temp-{}.html",
+                std::process::id()
+            ));
+            fs::write(&html_temp, &html)
+                .with_context(|| format!("write temp html {}", html_temp.display()))?;
+
+            let render_result = render_pdf_from_html(&html_temp, &pdf_output);
+            // Best-effort temp cleanup; do not mask a render error.
+            let _ = fs::remove_file(&html_temp);
+            render_result?;
+
+            // Sanity-check the produced bytes look like a PDF.
+            let produced = fs::read(&pdf_output)
+                .with_context(|| format!("read produced pdf {}", pdf_output.display()))?;
+            if produced.len() < 4 || &produced[..4] != b"%PDF" {
+                bail!(
+                    "PDF renderer produced a file that does not start with `%PDF-` magic: {}",
+                    pdf_output.display()
+                );
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "format": "pdf",
+                        "output": pdf_output.display().to_string(),
+                        "bytes": produced.len(),
+                        "findings": report.findings.len(),
+                    }))?
+                );
+            } else {
+                println!("flagship report: {}", pdf_output.display());
+                println!("findings: {}", report.findings.len());
+                println!("format: pdf ({} bytes)", produced.len());
+            }
+        }
+        other => bail!(
+            "unsupported format '{}'; use 'html', 'markdown', or 'pdf'",
+            other
+        ),
     }
 
     Ok(())
+}
+
+/// Render a single HTML file to PDF using whichever external renderer is
+/// installed. Order of preference: wkhtmltopdf (smallest install, dedicated),
+/// chromium / google-chrome / chrome (headless with --print-to-pdf).
+/// If none are available, returns an explicit install-instructions error.
+fn render_pdf_from_html(html_path: &Path, pdf_path: &Path) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let html_abs = html_path
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", html_path.display()))?;
+    let pdf_abs = pdf_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&pdf_abs)?;
+
+    fn bin_available(cmd: &str) -> bool {
+        Command::new(cmd)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    // 1. wkhtmltopdf.
+    if bin_available("wkhtmltopdf") {
+        let status = Command::new("wkhtmltopdf")
+            .arg("--quiet")
+            .arg(&html_abs)
+            .arg(pdf_path)
+            .status()
+            .with_context(|| "spawn wkhtmltopdf")?;
+        if !status.success() {
+            bail!("wkhtmltopdf exited non-zero ({:?})", status.code());
+        }
+        return Ok(());
+    }
+
+    // 2. headless chromium / chrome (any of several common binary names).
+    for chrome_bin in [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+    ] {
+        if bin_available(chrome_bin) {
+            let url = format!("file://{}", html_abs.display());
+            let print_arg = format!("--print-to-pdf={}", pdf_path.display());
+            let status = Command::new(chrome_bin)
+                .arg("--headless")
+                .arg("--disable-gpu")
+                .arg("--no-sandbox")
+                .arg(&print_arg)
+                .arg(&url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .with_context(|| format!("spawn {chrome_bin}"))?;
+            if !status.success() {
+                bail!(
+                    "{chrome_bin} --print-to-pdf exited non-zero ({:?})",
+                    status.code()
+                );
+            }
+            return Ok(());
+        }
+    }
+
+    bail!(
+        "PDF rendering requires one of `wkhtmltopdf`, `chromium`, `chromium-browser`, \
+         `google-chrome`, `google-chrome-stable`, or `chrome` on PATH. Install one and \
+         re-run, OR use `--format html` / `--format markdown` which have no external \
+         dependencies."
+    )
 }
 
 fn ci_pipeline_run(
@@ -12648,6 +12781,104 @@ mod tests {
     // benchmarks/METHODOLOGY.md published a 100/100/100/A+ headline that was
     // produced by a tautological scoring path. This guard prevents the headline
     // from being reintroduced into either doc.
+    #[test]
+    // --- T3.b regression tests -------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §3 P4.S4 flagged "no PDF renderer; only HTML/markdown".
+    // T3.b shells out to a real PDF binary (wkhtmltopdf / chromium / chrome)
+    // with NO synthesis fallback — if no binary is available the call errors
+    // with a clear "install one of these" message. These tests pin both
+    // branches.
+
+    #[test]
+    fn render_pdf_from_html_produces_real_pdf_magic_or_explicit_install_error() {
+        let dir = test_workspace("pdf-render");
+        fs::create_dir_all(&dir).unwrap();
+        let html = dir.join("flagship.html");
+        let pdf = dir.join("flagship.pdf");
+        fs::write(
+            &html,
+            "<html><body><h1>Flagship test</h1><p>verified cross-tenant BOLA</p></body></html>",
+        )
+        .unwrap();
+
+        match render_pdf_from_html(&html, &pdf) {
+            Ok(()) => {
+                // A real PDF binary was found and ran successfully: assert the
+                // resulting file starts with the PDF magic bytes.
+                let bytes = fs::read(&pdf).expect("pdf bytes");
+                assert!(
+                    bytes.len() >= 4,
+                    "PDF output too small: {} bytes",
+                    bytes.len()
+                );
+                assert_eq!(
+                    &bytes[..4],
+                    b"%PDF",
+                    "rendered PDF must start with %PDF magic; got: {:?}",
+                    &bytes[..4]
+                );
+            }
+            Err(err) => {
+                // No PDF binary on this host: the error message MUST tell the
+                // operator which binaries to install. This guards against a
+                // silent "fake fallback" being introduced.
+                let msg = format!("{err:#}");
+                assert!(
+                    msg.contains("PDF rendering requires"),
+                    "missing install hint, got: {msg}"
+                );
+                for needed in [
+                    "wkhtmltopdf",
+                    "chromium",
+                    "google-chrome",
+                ] {
+                    assert!(
+                        msg.contains(needed),
+                        "install hint must mention `{needed}`; got: {msg}"
+                    );
+                }
+                assert!(
+                    msg.contains("`--format html`")
+                        || msg.contains("html") && msg.contains("markdown"),
+                    "error must point at the still-available html/markdown formats; got: {msg}"
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_pdf_from_html_never_emits_a_non_pdf_file_silently() {
+        // T3.b mutation guard: if the renderer ever returns Ok without writing
+        // a real PDF (e.g. someone adds a "synthesize a placeholder pdf"
+        // fallback), this test catches it. We construct an HTML file, run the
+        // renderer; if it returns Ok the output must be a real PDF; if it
+        // returns Err NO output file may be left on disk.
+        let dir = test_workspace("pdf-render-no-silent-fake");
+        fs::create_dir_all(&dir).unwrap();
+        let html = dir.join("in.html");
+        let pdf = dir.join("out.pdf");
+        fs::write(&html, "<html><body>x</body></html>").unwrap();
+        let result = render_pdf_from_html(&html, &pdf);
+        match result {
+            Ok(()) => {
+                let bytes = fs::read(&pdf).unwrap();
+                assert!(bytes.len() >= 4 && &bytes[..4] == b"%PDF");
+            }
+            Err(_) => {
+                assert!(
+                    !pdf.exists(),
+                    "renderer errored but left an output file at {} — \
+                     this looks like a silent synthesis fallback, which T3.b forbids",
+                    pdf.display()
+                );
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn diligence_and_methodology_docs_do_not_reissue_retracted_headlines() {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

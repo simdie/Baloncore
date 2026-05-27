@@ -504,3 +504,51 @@ PriceTamper variant remains a known validator limitation (its body-token
 heuristic doesn't handle responses that contain BOTH the tampered total and
 the legitimate unit price); that's a future-pass refinement, not a fake.
 
+---
+
+## T3.b — PDF flagship report (real renderer, no synthesis)
+
+**Changed.**
+- `export-flagship-report` now accepts `--format pdf`. The renderer
+  produces a real PDF from the FlagshipReport that was built from run-dir
+  artifacts; it never synthesises a finding or fabricates a placeholder
+  document.
+- Implementation: render the report HTML to a temp file, then shell out
+  to one of `wkhtmltopdf`, `chromium`, `chromium-browser`, `google-chrome`,
+  `google-chrome-stable`, or `chrome` (first-match wins). The CLI sanity-
+  checks the produced bytes start with `%PDF-` magic; if not, it errors.
+- If NO PDF renderer is available, the command exits non-zero with the
+  explicit message
+  `"PDF rendering requires one of `wkhtmltopdf`, `chromium`, … . Install
+  one and re-run, OR use `--format html` / `--format markdown` which have
+  no external dependencies."`
+- HTML / markdown formats are unchanged.
+
+**Tests added** (in `crates/baloncore-cli/src/main.rs::tests`):
+- `render_pdf_from_html_produces_real_pdf_magic_or_explicit_install_error`
+  — writes a minimal HTML temp file, calls `render_pdf_from_html`, and
+  asserts EITHER (a) the renderer returned Ok AND the output starts with
+  `%PDF`, OR (b) the renderer returned Err with a message containing
+  `"PDF rendering requires"` and listing `wkhtmltopdf`, `chromium`,
+  `google-chrome`, plus the html/markdown fallback suggestion.
+- `render_pdf_from_html_never_emits_a_non_pdf_file_silently` — when the
+  renderer errors, the output file MUST NOT exist (catches any future
+  "silent placeholder fallback" regression).
+
+**Mutation check.** Replaced the renderer's final `bail!(...)` with a
+silent fallback that writes `"fake pdf placeholder"` bytes and returns
+`Ok(())`. Both T3.b tests went RED:
+`assertion failed: rendered PDF must start with %PDF magic; got: [102, 97, 107, 101]`
+(those bytes are `"fake"`). Restored from `/tmp/main.rs.bak.t3b` → GREEN.
+
+**Host note.** This dev box has no PDF binary installed (verified:
+`wkhtmltopdf`, `chromium*`, `google-chrome*`, `chrome` all missing). The
+test therefore exercises the "explicit-install-error" branch. CI / hosts
+with any of those binaries installed will exercise the real-PDF-magic
+branch automatically.
+
+**V0 verdict change.** P4.S4 PDF flagship report: PARTIAL (HTML only) →
+**REAL with a system-dep requirement**. The renderer is real (no synthesis,
+no placeholder bytes); whether it can be invoked on a given host depends
+on whether a PDF binary is installed there.
+
