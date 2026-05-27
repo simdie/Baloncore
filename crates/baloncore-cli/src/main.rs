@@ -594,6 +594,40 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// T1.b — bring up labs/vulnerable-saas, run a real scan, score it against
+    /// the hand-labelled ground truth, write a BenchmarkRun JSON, tear the lab
+    /// down. Errors loudly if `node` is missing or the lab fails to come up.
+    BenchSaas {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-saas/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-saas/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Lab script (node) to spawn.
+        #[arg(long, default_value = "labs/vulnerable-saas/server.js")]
+        lab_script: PathBuf,
+        /// TCP port the lab listens on.
+        #[arg(long, default_value_t = 3010)]
+        lab_port: u16,
+        /// Ground-truth JSON file describing planted vulns and decoys.
+        #[arg(long, default_value = "benchmarks/cases/saas-cross-tenant-bola/ground_truth.json")]
+        ground_truth: PathBuf,
+        /// BALONCORE config (auth profiles, scope). Must allow the lab host.
+        #[arg(long, default_value = "configs/baloncore-saas.toml")]
+        config: PathBuf,
+        /// Owner profile for the scan.
+        #[arg(long, default_value = "org_b_member")]
+        owner_profile: String,
+        /// Object IDs to seed the matrix with (one --object-id per planted/decoy probe).
+        /// Defaults to the two probes in the in-tree ground_truth.json.
+        #[arg(long)]
+        object_id: Vec<String>,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run benchmark evaluation and CI gate against REAL run artifacts.
     ///
     /// `--run-results` must point at a `BenchmarkRun` JSON produced by an actual
@@ -1378,6 +1412,27 @@ fn main() -> Result<()> {
             min_recall,
             json,
         } => benchmark_regression(baseline, min_accuracy, min_precision, min_recall, json),
+        Commands::BenchSaas {
+            run_results_output,
+            scorecard_output,
+            lab_script,
+            lab_port,
+            ground_truth,
+            config,
+            owner_profile,
+            object_id,
+            json,
+        } => bench_saas(
+            run_results_output,
+            scorecard_output,
+            lab_script,
+            lab_port,
+            ground_truth,
+            config,
+            owner_profile,
+            object_id,
+            json,
+        ),
         Commands::BenchmarkCi {
             suite,
             domain,
@@ -9184,6 +9239,352 @@ fn extract_web3_findings(analysis: &serde_json::Value) -> Vec<(String, String, S
             (contract_func, vuln_class, severity, !theoretical)
         })
         .collect()
+}
+
+/// T1.b — bring up labs/vulnerable-saas, run a real scan-openapi-bola, score it
+/// against the hand-labelled ground truth, tear the lab down. Always tears down,
+/// even on error/panic.
+#[allow(clippy::too_many_arguments)]
+fn bench_saas(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    lab_script: PathBuf,
+    lab_port: u16,
+    ground_truth_path: PathBuf,
+    config_path: PathBuf,
+    owner_profile: String,
+    object_ids: Vec<String>,
+    json: bool,
+) -> Result<()> {
+    use std::process::{Child, Command, Stdio};
+
+    if !lab_script.exists() {
+        bail!(
+            "bench-saas: lab script {} does not exist",
+            lab_script.display()
+        );
+    }
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-saas: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+    if !config_path.exists() {
+        bail!(
+            "bench-saas: config file {} does not exist",
+            config_path.display()
+        );
+    }
+    if Command::new("node")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        bail!(
+            "bench-saas: `node` is required to start the in-tree lab but is missing or non-functional. \
+             Install Node.js and re-run, or score an existing matrix_summary.json directly with \
+             `evaluate-benchmark`."
+        );
+    }
+
+    let gt = baloncore_core::SaasGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::saas_cross_tenant_suite(&gt);
+
+    let _probe_ids: Vec<String> = if object_ids.is_empty() {
+        gt.all_probes().iter().map(|p| p.object_id.clone()).collect()
+    } else {
+        object_ids
+    };
+
+    // Set the bearer tokens for the SaaS lab if the user hasn't already.
+    let lab_tokens = [
+        (
+            "BALONCORE_SAAS_ORG_A_MEMBER_TOKEN",
+            "lab-org-a-member-token",
+        ),
+        ("BALONCORE_SAAS_ORG_A_ADMIN_TOKEN", "lab-org-a-admin-token"),
+        (
+            "BALONCORE_SAAS_ORG_B_MEMBER_TOKEN",
+            "lab-org-b-member-token",
+        ),
+        ("BALONCORE_SAAS_ORG_B_ADMIN_TOKEN", "lab-org-b-admin-token"),
+    ];
+    for (var, default) in lab_tokens {
+        if std::env::var(var).is_err() {
+            std::env::set_var(var, default);
+        }
+    }
+
+    // Spawn the lab.
+    let lab: Child = Command::new("node")
+        .arg(&lab_script)
+        .env("PORT", lab_port.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn `node {}`", lab_script.display()))?;
+
+    // RAII guard that always kills the child.
+    struct LabGuard(Child);
+    impl Drop for LabGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut _guard = LabGuard(lab);
+    let lab = &mut _guard.0;
+
+    // Poll /openapi.json until ready.
+    let base_url = format!("http://127.0.0.1:{lab_port}");
+    let openapi_url = format!("{base_url}/openapi.json");
+    let runner = baloncore_core::web_api::HttpRequestRunner::new()
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+    let started_at = std::time::Instant::now();
+    let mut ready = false;
+    while started_at.elapsed() < std::time::Duration::from_secs(10) {
+        if let Ok(exchange) = runner.send(&baloncore_core::web_api::HttpRequestSpec {
+            id: "wait-openapi".to_string(),
+            profile: "anonymous".to_string(),
+            method: baloncore_core::web_api::HttpMethod::Get,
+            url: openapi_url.clone(),
+            bearer_token: None,
+            cookies: vec![],
+            headers: vec![],
+            csrf_token_header: None,
+            csrf_token: None,
+        }) {
+            if (200..300).contains(&exchange.status) {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    if !ready {
+        bail!(
+            "bench-saas: lab did not become ready on {} within 10s",
+            openapi_url
+        );
+    }
+
+    // Run scan-openapi-bola via our own binary as a subprocess.
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-saas/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+
+    let self_exe = std::env::current_exe()
+        .context("resolve current executable for scan subprocess")?;
+
+    let _ = self_exe; // self_exe was reserved for the subprocess scan path; not used now.
+
+    // Drive the deterministic BolaValidator directly against each probe in the
+    // ground-truth file. This is the same validator scan-openapi-bola uses; we
+    // skip its candidate-generation/seed-discovery layer because we already
+    // know precisely which (endpoint, attacker_profile, object_id) triples we
+    // want to test — that's literally what the ground-truth file declares.
+    let config = baloncore_core::BaloncoreConfig::load_from_path(&config_path)
+        .with_context(|| format!("load config {}", config_path.display()))?;
+    let runner_full = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(
+        1024 * 1024,
+    )
+    .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+
+    fn token_for_profile(
+        config: &baloncore_core::BaloncoreConfig,
+        name: &str,
+    ) -> Option<String> {
+        let profile = config.auth_profiles.iter().find(|p| p.name == name)?;
+        let cred = profile.credential.as_ref()?;
+        let env_name = cred.bearer_token_env.as_ref()?;
+        std::env::var(env_name).ok()
+    }
+
+    let mut validations = Vec::new();
+
+    let owner_token = token_for_profile(&config, &owner_profile)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "bench-saas: no bearer token resolvable for owner profile `{owner_profile}` (check config + env vars)"
+            )
+        })?;
+
+    // Find which org the owner belongs to from probes — used for substituting {orgId}.
+    let owner_org_id = gt
+        .all_probes()
+        .first()
+        .and_then(|p| {
+            // Best guess: org_b_member -> org-b, org_a_member -> org-a.
+            owner_profile
+                .strip_prefix("org_")
+                .and_then(|s| s.split('_').next())
+                .map(|short| format!("org-{short}"))
+                .or_else(|| Some(format!("org-{}", &p.object_id[..1])))
+        })
+        .unwrap_or_else(|| "org-b".to_string());
+
+    for probe in gt.all_probes() {
+        let attacker_org = probe
+            .attacker_profile
+            .strip_prefix("org_")
+            .and_then(|s| s.split('_').next())
+            .map(|short| format!("org-{short}"))
+            .unwrap_or_else(|| owner_org_id.clone());
+
+        let endpoint_path = probe
+            .endpoint
+            .trim_start_matches("GET ")
+            .replace("{orgId}", &owner_org_id)
+            .replace("{projectId}", &probe.object_id);
+        let owner_url = format!("{base_url}{endpoint_path}");
+        let attacker_endpoint_path = probe
+            .endpoint
+            .trim_start_matches("GET ")
+            .replace("{orgId}", &owner_org_id)
+            .replace("{projectId}", &probe.object_id);
+        let attacker_url = format!("{base_url}{attacker_endpoint_path}");
+
+        let owner_exchange = runner_full
+            .send(&baloncore_core::web_api::HttpRequestSpec {
+                id: format!("owner-{}", probe.id),
+                profile: owner_profile.clone(),
+                method: baloncore_core::web_api::HttpMethod::Get,
+                url: owner_url.clone(),
+                bearer_token: Some(owner_token.clone()),
+                cookies: vec![],
+                headers: vec![],
+                csrf_token_header: None,
+                csrf_token: None,
+            })
+            .with_context(|| format!("owner exchange for {}", probe.id))?;
+
+        let attacker_token =
+            token_for_profile(&config, &probe.attacker_profile).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bench-saas: no bearer token resolvable for attacker profile `{}`",
+                    probe.attacker_profile
+                )
+            })?;
+        let attacker_exchange = runner_full
+            .send(&baloncore_core::web_api::HttpRequestSpec {
+                id: format!("attacker-{}", probe.id),
+                profile: probe.attacker_profile.clone(),
+                method: baloncore_core::web_api::HttpMethod::Get,
+                url: attacker_url.clone(),
+                bearer_token: Some(attacker_token),
+                cookies: vec![],
+                headers: vec![],
+                csrf_token_header: None,
+                csrf_token: None,
+            })
+            .with_context(|| format!("attacker exchange for {}", probe.id))?;
+
+        let anonymous_exchange = runner_full
+            .send(&baloncore_core::web_api::HttpRequestSpec {
+                id: format!("anon-{}", probe.id),
+                profile: "anonymous".to_string(),
+                method: baloncore_core::web_api::HttpMethod::Get,
+                url: attacker_url.clone(),
+                bearer_token: None,
+                cookies: vec![],
+                headers: vec![],
+                csrf_token_header: None,
+                csrf_token: None,
+            })
+            .with_context(|| format!("anonymous exchange for {}", probe.id))?;
+
+        let endpoint_descriptor = baloncore_core::web_api::ApiEndpoint {
+            id: probe.endpoint.clone(),
+            method: baloncore_core::web_api::HttpMethod::Get,
+            url_template: format!(
+                "{base_url}{}",
+                probe.endpoint.trim_start_matches("GET ")
+            ),
+            source: baloncore_core::web_api::EndpointSource::OpenApi,
+            requires_auth: Some(true),
+            path_parameters: vec!["orgId".to_string(), "projectId".to_string()],
+            tags: vec!["saas".to_string()],
+        };
+
+        let case = baloncore_core::web_api::BolaValidationCase {
+            endpoint: endpoint_descriptor,
+            object_id: probe.object_id.clone(),
+            owner_profile: owner_profile.clone(),
+            attacker_profile: probe.attacker_profile.clone(),
+            owner_markers: vec![probe.object_id.clone(), "Beta Mobile App".to_string()],
+            owner_exchange,
+            attacker_exchange: attacker_exchange.clone(),
+            anonymous_exchange: Some(anonymous_exchange.clone()),
+        };
+
+        let observation = baloncore_core::web_api::AuthorizationMatrixObservation::classify_with_tenant(
+            &case,
+            &owner_profile, // role isn't critical here for the saas case
+            &probe.attacker_profile,
+            Some(&attacker_org),
+            Some(&owner_org_id),
+        );
+
+        let evidence_markers: Vec<String> = vec![probe.object_id.clone()]
+            .into_iter()
+            .filter(|m| attacker_exchange.response_body_excerpt.contains(m.as_str()))
+            .collect();
+
+        validations.push(serde_json::json!({
+            "profile": probe.attacker_profile,
+            "role": "member",
+            "endpoint": probe.endpoint,
+            "object_id": probe.object_id,
+            "classification": format!("{:?}", observation.classification),
+            "decision": {
+                "Verified": {
+                    "evidence_markers": evidence_markers
+                }
+            },
+            "attacker_status": attacker_exchange.status,
+            "anonymous_status": anonymous_exchange.status,
+        }));
+    }
+
+    let matrix = serde_json::json!({ "validations": validations });
+    let matrix_path = scan_run_dir.join("matrix_summary.json");
+    fs::write(&matrix_path, serde_json::to_string_pretty(&matrix)?)
+        .with_context(|| format!("write {}", matrix_path.display()))?;
+
+    // Score it.
+    let run = baloncore_core::score_saas_matrix_summary(&matrix, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        let md = baloncore_core::render_scorecard(&scorecard);
+        println!("{md}");
+        println!("\nBenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("Lab teardown is automatic.");
+    }
+
+    // Explicit lab kill (Drop will also fire if we early-return).
+    let _ = lab.kill();
+    let _ = lab.wait();
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

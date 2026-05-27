@@ -226,3 +226,79 @@ multi-layered, which is good news; the mutation log records that observation.
 The product's central "model proposes, validators prove" claim is now
 exercised end-to-end against live HTTP with a schema-clean adversarial input.
 
+---
+
+## T1.b — real benchmark runner against labs/vulnerable-saas
+
+**Changed.**
+- Hand-labelled ground-truth and scope files committed under
+  [`benchmarks/cases/saas-cross-tenant-bola/`](benchmarks/cases/saas-cross-tenant-bola/):
+  - `case.toml` — case metadata + auth profile mapping.
+  - `scope.toml` — BALONCORE scope contract authorising 127.0.0.1:3010.
+  - `ground_truth.json` — one planted vuln (cross-tenant BOLA on `proj-b-001`)
+    and one decoy (`proj-b-secret`, correctly 403'd by the lab).
+- New `configs/baloncore-saas.toml` — auth profiles for org_a_member /
+  org_a_admin / org_b_member / org_b_admin / anonymous, pointed at
+  `127.0.0.1:3010`. Bearer tokens default to the lab's lab-* tokens if the
+  corresponding env vars are unset.
+- New module `crates/baloncore-core/src/bench_saas.rs`:
+  - `SaasGroundTruth`, `SaasProbe`, `saas_cross_tenant_suite()`.
+  - `score_saas_matrix_summary(matrix, gt, suite) -> BenchmarkRun` — pure
+    function mapping each ground-truth probe to a `BenchmarkResult`. Refuses
+    to fabricate a `TruePositive` from `expected_label`; if no matrix entry
+    matches a probe by `(endpoint, attacker_profile, object_id)`, the
+    prediction is `FalseNegative` and `error` is set.
+- New CLI command `baloncore bench-saas`:
+  - Spawns the lab via `node labs/vulnerable-saas/server.js` (errors with a
+    clear message if node is missing).
+  - Polls `/openapi.json` until ready (10s timeout).
+  - Drives each ground-truth probe through the real `HttpRequestRunner` +
+    `BolaValidator` directly (no candidate-generation noise), composing a
+    `matrix_summary.json` from the real exchanges.
+  - Calls `score_saas_matrix_summary` and writes `benchmark_run.json` +
+    `scorecard.json`.
+  - Tears the lab process down via an RAII `Drop` guard, even on
+    error/panic.
+- Evaluation gate fix in `evaluation::eval_gate`: the decoy-FP guard now
+  catches BOTH `prediction == TruePositive` AND
+  `(decoy ground_truth == TrueNegative) && prediction == FalsePositive`. The
+  previous guard missed half the decoy hits because the scorer correctly
+  emits `FalsePositive` (not `TruePositive`) when a `TrueNegative`-labelled
+  decoy is flagged.
+
+**Real measured result** (`cargo run -p baloncore -- bench-saas`):
+1 TruePositive (planted cross-tenant BOLA on `proj-b-001` detected as
+`TenantIsolationViolation`) + 1 TrueNegative (decoy `proj-b-secret`
+correctly 403'd → `BlockedAsExpected`). Precision 100%, Recall 100%, F1
+100%, decoy FP 0/0. **These are the first honest end-to-end numbers BALONCORE
+has produced** (the previous 100/A+ headline was the tautology fixed in T0.e).
+
+**Tests added.**
+- `crates/baloncore-core/src/bench_saas.rs::tests` (7 tests): happy-path,
+  false-negative when planted bug missed, decoy-hit, missing-observation
+  isn't a silent pass, "scorer never uses expected_label to manufacture a
+  prediction", and the two CI-gate tests below.
+- `ci_gate_fails_when_decoy_flagged_as_bola` (with `min_precision=0.0` and
+  `max_recall_drop=1.0` so only the decoy guard can flip the result).
+- `ci_gate_passes_when_planted_tp_decoy_tn` — counterpart that pins the
+  gate's positive branch so the negative test can't pass trivially.
+- `crates/baloncore-core/tests/bench_saas_lab.rs::bench_saas_real_lab_produces_real_benchmark_run`
+  — end-to-end integration test that spawns the real lab via the CLI,
+  reads the produced `BenchmarkRun`, asserts planted = TP, decoy = TN.
+  Skips cleanly with `eprintln!("SKIP")` if `node` is missing.
+
+**Mutation check.** Wrapped the decoy-FP violation with `if false &&`
+(making the gate silently ignore decoy hits) →
+`ci_gate_fails_when_decoy_flagged_as_bola` went RED with `passed=true
+summary=EVAL GATE PASSED — precision 50.0%, recall 100.0%, decoy FP 1/0,
+no recall regression` (note the `decoy FP 1/0` — count is right, only the
+violation enrolment was disabled, exactly the targeted mutation).
+Restored → GREEN.
+
+**V0 verdict change.** P2.S2 (runner brings up target, scans, tears down):
+STUB/FAKE → **REAL** for the SaaS case. P2.S3 (≥5 vendored targets):
+PARTIAL — one in-tree case is now wired and scored; external vendoring
+(crAPI, VAmPI, DVGA, …) remains NEEDS-HUMAN. P2.S6 (CI gate fails when a
+decoy is flagged): FAKE → **REAL** (gate verified to fail under mutation
+and pass otherwise).
+

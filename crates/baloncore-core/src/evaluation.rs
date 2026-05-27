@@ -2294,11 +2294,24 @@ pub fn eval_gate(
 
     for decoy_case in &decoy_cases {
         if let Some(result) = run.results.iter().find(|r| r.case_id == decoy_case.case_id) {
-            if result.prediction == GroundTruthLabel::TruePositive {
+            // A decoy is "hit" when the scanner says the case is a finding
+            // even though the case was tagged decoy / labelled as a benign
+            // negative. The scorer may report this as TruePositive (decoy
+            // ground_truth == FalsePositive) or as FalsePositive (decoy
+            // ground_truth == TrueNegative). Either is a false alarm and
+            // must count against the decoy FP gate.
+            let is_decoy_hit = match (decoy_case.ground_truth, result.prediction) {
+                (GroundTruthLabel::FalsePositive, GroundTruthLabel::TruePositive) => true,
+                (GroundTruthLabel::TrueNegative, GroundTruthLabel::FalsePositive) => true,
+                (GroundTruthLabel::TrueNegative, GroundTruthLabel::TruePositive) => true,
+                _ => false,
+            };
+            if is_decoy_hit {
                 decoy_fp_count += 1;
                 decoy_fp_violations.push(format!(
-                    "decoy false positive: case '{}' predicted TruePositive (ground truth: {})",
+                    "decoy false positive: case '{}' predicted {} (ground truth: {})",
                     decoy_case.case_id,
+                    result.prediction.as_str(),
                     decoy_case.ground_truth.as_str()
                 ));
             }

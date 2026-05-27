@@ -1,0 +1,60 @@
+# BALONCORE config for the in-tree vulnerable SaaS lab (labs/vulnerable-saas).
+# Used by `bench-saas` and by manual `scan-openapi-bola` invocations.
+
+[project]
+name = "baloncore-vulnerable-saas-lab"
+description = "Authorized in-tree SaaS lab with planted cross-tenant BOLA + decoy."
+tags = ["api", "saas", "multi-tenant"]
+
+[scope]
+allow_urls = ["http://127.0.0.1:3010"]
+allow_hosts = ["127.0.0.1", "localhost"]
+deny_hosts = []
+max_depth = 3
+
+[[auth_profiles]]
+name = "anonymous"
+role = "anonymous"
+description = "Unauthenticated baseline."
+object_markers = []
+
+[[auth_profiles]]
+name = "org_a_member"
+role = "member"
+description = "Org A member — attacker identity in the cross-tenant probe."
+object_markers = ["org-a", "member_a"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_SAAS_ORG_A_MEMBER_TOKEN"
+
+[[auth_profiles]]
+name = "org_a_admin"
+role = "admin"
+description = "Org A admin."
+object_markers = ["org-a", "admin_a"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_SAAS_ORG_A_ADMIN_TOKEN"
+
+[[auth_profiles]]
+name = "org_b_member"
+role = "member"
+description = "Org B member — owner identity for proj-b-001 + proj-b-secret."
+object_markers = ["org-b", "member_b", "proj-b-001", "Beta Mobile App"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_SAAS_ORG_B_MEMBER_TOKEN"
+
+[[auth_profiles]]
+name = "org_b_admin"
+role = "admin"
+description = "Org B admin — required to read proj-b-secret."
+object_markers = ["org-b", "admin_b"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_SAAS_ORG_B_ADMIN_TOKEN"
+
+[engines]
+web_api = true
+cloud_iam = false
+web3 = false

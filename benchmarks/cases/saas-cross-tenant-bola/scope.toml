@@ -1,0 +1,8 @@
+# BALONCORE scope contract authorizing scans of the in-tree vulnerable SaaS lab.
+[scope]
+allow_urls = ["http://127.0.0.1:3010"]
+allow_hosts = ["127.0.0.1", "localhost"]
+deny_hosts = []
+max_depth = 3
+authorized = true
+notes = "In-tree intentionally-vulnerable lab. Do not point this scope at any other host."

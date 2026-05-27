@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_runtime;
 pub mod agents;
 pub mod attack_graph;
+pub mod bench_saas;
 pub mod business_logic;
 pub mod ci;
 pub mod ci_analytics;
@@ -47,6 +48,9 @@ pub use agent::{
 pub use agent_runtime::{
     build_repair_request, contains_unredacted_secrets, parse_agent_output, redact_for_model,
     run_live_agent, run_live_agent_pipeline, AgentParseError, ModelBudget, ModelBudgetReport,
+};
+pub use bench_saas::{
+    saas_cross_tenant_suite, score_saas_matrix_summary, SaasGroundTruth, SaasProbe,
 };
 pub use business_logic::{
     BusinessLogicAbuse, BusinessLogicDecision, BusinessLogicValidationCase, BusinessLogicValidator,

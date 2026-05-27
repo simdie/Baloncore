@@ -1,0 +1,31 @@
+{
+  "case_id": "saas-cross-tenant-bola",
+  "description": "Hand-labelled ground truth for the labs/vulnerable-saas target. Each `probes` entry describes ONE (endpoint, attacker_profile, object_id) triple that the bench scorer must find in the matrix_summary.json produced by scan-openapi-bola. The expected_label is what the validator/classifier MUST conclude for the probe.",
+  "ground_truth_version": 1,
+  "lab_source": "labs/vulnerable-saas/server.js",
+  "vulnerabilities": [
+    {
+      "id": "vuln-cross-tenant-bola-proj-b-001",
+      "class": "TenantIsolationViolation",
+      "endpoint": "GET /api/orgs/{orgId}/projects/{projectId}",
+      "object_id": "proj-b-001",
+      "owner_profile": "org_b_member",
+      "attacker_profile": "org_a_member",
+      "expected_label": "TruePositive",
+      "rationale": "labs/vulnerable-saas/server.js:220-227 returns 200 + project body when an org_a caller requests an org_b project; the lab_note in the response confirms intent.",
+      "expected_evidence_substrings": ["proj-b-001", "Beta Mobile App"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-proj-b-secret",
+      "class": "BlockedAsExpected",
+      "endpoint": "GET /api/orgs/{orgId}/projects/{projectId}",
+      "object_id": "proj-b-secret",
+      "owner_profile": "org_b_member",
+      "attacker_profile": "org_a_member",
+      "expected_label": "TrueNegative",
+      "rationale": "labs/vulnerable-saas/server.js:211-218 returns 403 + lab_note='decoy: ...' when a non-org-b caller requests proj-b-secret. Any matrix entry flagging this as a BOLA-class finding is a false positive and must be counted as a decoy hit."
+    }
+  ]
+}

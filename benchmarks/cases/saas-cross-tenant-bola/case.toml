@@ -1,0 +1,22 @@
+# T1.b — vulnerable-saas cross-tenant BOLA bench case
+#
+# A single hand-labelled case definition for the in-tree `labs/vulnerable-saas`
+# target. The scorer in `crates/baloncore-core/src/bench_saas.rs` consumes the
+# matrix_summary.json produced by `scan-openapi-bola` against this lab and
+# emits a BenchmarkRun grouped by the labels in `ground_truth.json`.
+
+id = "saas-cross-tenant-bola"
+name = "Vulnerable SaaS lab: cross-tenant BOLA + decoy"
+kind = "web_api"
+license = "Proprietary (in-tree lab)"
+source = "labs/vulnerable-saas/server.js"
+authorized = true
+base_url = "http://127.0.0.1:3010"
+lab_start_command = "node labs/vulnerable-saas/server.js"
+
+# What the scan should be run as (operator-owned identity).
+owner_profile = "org_b_member"
+# Optional non-owner identities the matrix should test. The lab also has
+# org_a_admin / org_a_viewer / org_b_admin tokens; including more is fine and
+# does not change the ground-truth labels.
+attacker_profiles = ["org_a_member"]
