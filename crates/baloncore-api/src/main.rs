@@ -457,18 +457,20 @@ fn status_payload(config: &ApiConfig) -> Result<Value> {
         *status_counts.entry(status).or_default() += 1;
     }
     Ok(json!({
-        "name": "BALONCORE Rust API",
-        "mode": "rust-enterprise-api",
+        "name": "BALONCORE local dev workbench API",
+        "mode": "single-tenant-local-dev",
         "created_at": utc_now(),
         "repo_root": config.repo_root,
         "workbench_root": config.workbench_root,
         "jobs_root": jobs_root(config),
-        "network_posture": "binds to 127.0.0.1 by default; active scans require authorized=true",
+        "network_posture": "binds to 127.0.0.1 only; NO caller authentication and NO tenant isolation — anything that can reach the port can read every artifact; `authorized=true` in the POST body is required for active scans (self-declared flag, not access control)",
         "kernel": "Rust validator/proof engine",
-        "control_plane": "Rust HTTP API",
+        "control_plane": "synchronous Rust HTTP server (TcpListener + thread::spawn)",
         "frontend": "Next.js app in apps/web",
-        "storage": "Postgres-ready schema with local durable adapter",
-        "worker_runtime": "durable queue metadata plus local worker abstraction",
+        "storage": "JSON files under .baloncore/workbench/ (no Postgres adapter; migrations/0001_saas_control_plane.sql describes a target schema that is NOT executed by this binary)",
+        "worker_runtime": "in-process job records; /api/workers/reconcile marks stale jobs failed but there is no real worker lease/heartbeat/exactly-once reclaim",
+        "evidence_at_rest": "obfuscated (XOR-with-constant-key) — NOT cryptographic; provides ZERO confidentiality. See docs/VERIFICATION/V0_GROUND_TRUTH.md §6.3.",
+        "production_readiness": "NOT PRODUCTION-READY. Do not expose beyond 127.0.0.1. See docs/VERIFICATION/V0_GROUND_TRUTH.md §3 (P5 rows) for the gap list.",
         "jobs": {
             "recent_count": jobs.as_array().map(|j| j.len()).unwrap_or_default(),
             "status_counts": status_counts
@@ -477,10 +479,10 @@ fn status_payload(config: &ApiConfig) -> Result<Value> {
             "authorized OpenAPI BOLA/BFLA/missing-auth scan orchestration",
             "local repo inventory with redacted secret detection",
             "Solidity/Web3 project handoff to BALONCORE invariant analysis",
-            "tenant/org/project/asset control-plane model",
-            "durable queue records with worker pools and attempt tracking",
-            "durable local job ledger",
-            "artifact index, enterprise scorecard, executive summary, and safe artifact preview"
+            "SaaS-shaped JSON records for org/project/asset modelling (single-tenant only; no cross-org isolation)",
+            "in-process job records with worker registration metadata (no real lease/reclaim semantics)",
+            "JSON job ledger",
+            "artifact index, local scorecard, executive summary, and safe artifact preview"
         ]
     }))
 }
@@ -1320,7 +1322,7 @@ fn executive_brief(config: &ApiConfig) -> Result<Value> {
         "why_it_stands_out": [
             "Proof-first: findings require scoped evidence, response capture, and false-positive kill checks.",
             "Defense-first: every verified issue has regression and control output.",
-            "Enterprise-ready: tenant audit records, scope contracts, and evidence trust are part of the workflow.",
+            "Single-tenant local dev today: scope contracts and evidence trust are part of the workflow, but the API has no caller authentication or cross-tenant isolation. Enterprise-grade hosting (real RBAC, Postgres, encrypted evidence at rest, worker reclaim) is on the roadmap — see docs/VERIFICATION/V0_GROUND_TRUTH.md §3 (P5 rows).",
             "Sector-aware: proof language maps into SaaS, fintech, health, Web3, and cloud control language."
         ]
     }))
@@ -4558,5 +4560,55 @@ mod tests {
         };
         let response = route_request(&config, request).unwrap();
         assert_eq!(response.0, 200);
+    }
+
+    // --- T0.d regression test --------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §3 P5.S0/S1/S2 flagged that /api/status advertised a
+    // "Postgres-ready" / "rust-enterprise-api" posture that was not implemented.
+    // This guard pins the honest labels and prevents the false claims from
+    // creeping back.
+    #[test]
+    fn status_payload_does_not_claim_capabilities_we_do_not_have() {
+        let (config, root) = make_test_config();
+        let payload = status_payload(&config).unwrap();
+        let payload_str = serde_json::to_string(&payload).unwrap();
+
+        // Forbidden positive claims that we have NOT implemented.
+        let banned_substrings = [
+            "rust-enterprise-api",
+            "Postgres-ready",
+            "production-ready",
+            "multi-tenant",
+            "AES-256-GCM",
+            "encrypted at rest",
+        ];
+        for needle in banned_substrings {
+            assert!(
+                !payload_str.contains(needle),
+                "/api/status payload must not contain `{}` (claim is not implemented); \
+                 see docs/VERIFICATION/V0_GROUND_TRUTH.md. Payload: {}",
+                needle,
+                payload_str
+            );
+        }
+
+        // Required honest disclosures.
+        let required = [
+            "single-tenant-local-dev",
+            "NO caller authentication",
+            "NO tenant isolation",
+            "NOT cryptographic",
+            "NOT PRODUCTION-READY",
+        ];
+        for needle in required {
+            assert!(
+                payload_str.contains(needle),
+                "/api/status payload must contain honesty marker `{}`. Payload: {}",
+                needle,
+                payload_str
+            );
+        }
+        std::fs::remove_dir_all(root).ok();
     }
 }

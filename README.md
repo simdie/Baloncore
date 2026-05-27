@@ -91,12 +91,18 @@ corepack pnpm --dir apps/web dev
 ./scripts/stage1_e2e_demo.sh
 ```
 
-## Enterprise Console
+## Local Dev Workbench
 
-BALONCORE now includes a Rust-backed local enterprise console. The Rust API runs
-on `127.0.0.1`, requires explicit `authorized=true` before active web/API scans
-or repo review, and writes durable jobs plus evidence artifacts under
+BALONCORE includes a Rust-backed single-tenant local dev workbench. The Rust API
+binds to `127.0.0.1` only, has **no caller authentication and no tenant
+isolation** (anything that can talk to the port can read every artifact),
+requires the request body to set `authorized=true` before active web/API scans
+or repo review, and writes jobs plus evidence artifacts as JSON files under
 `.baloncore/workbench`.
+
+It is NOT a multi-tenant, encrypted, audited, or production control plane. See
+[docs/VERIFICATION/V0_GROUND_TRUTH.md](docs/VERIFICATION/V0_GROUND_TRUTH.md) §3
+(P5 rows) for what's real and what's still aspirational.
 
 Start the Rust control plane:
 
@@ -126,24 +132,22 @@ The Rust API listens at:
 http://127.0.0.1:8788
 ```
 
-The SaaS console can:
+The local dev workbench can:
 
-- present a polished public enterprise frontend for BALONCORE
-- simulate secure login into customer and admin workspaces
-- onboard companies into the local SaaS tenant ledger
-- model organizations, projects, assets, scope contracts, queue records, workers,
-  attempts, artifacts, evidence bundles, and audit events with a Postgres-ready
-  schema
-- oversee companies, plans, proof queues, and evidence trust from admin
+- serve a Next.js operator surface for inspecting local scan artifacts
+- simulate login (no real authentication; do not expose beyond 127.0.0.1)
+- write SaaS-shaped JSON records into the local workbench directory so the
+  schema can be exercised — **this is JSON-on-disk, not a database; there is no
+  cross-tenant isolation, no Postgres adapter, no RBAC enforcement at the API
+  boundary** (see V0_GROUND_TRUTH §3 rows P5.S0/S1)
 - run an authorized OpenAPI auth-matrix scan through the Rust validator kernel
 - scan a local repository for security-relevant inventory and redacted secrets
 - hand Solidity/Web3 repositories to `analyze-web3`
-- run scans through a durable background job ledger
-- expose durable queue metadata, worker pools, registered workers, and attempt
-  history for production worker migration
-- generate artifact indexes, enterprise scorecards, and executive summaries
-- generate board-ready executive briefs, risk registers, policy gates, and
-  sector threat-model language from the same verified evidence
+- run scans through a JSON-file job ledger (single process; the
+  `/api/workers/reconcile` endpoint marks stale jobs failed but there is no
+  real worker reclaim/heartbeat — see V0 row P5.S3)
+- generate artifact indexes, executive summaries, and risk registers from
+  whatever artifacts happen to be on disk
 - run an autonomous research engine that converts scoped artifacts into a recon
   graph, validator-bound hypotheses, proof execution plans, false-positive
   challenges, and finding memory records
@@ -194,12 +198,14 @@ POST /api/scan/repo
 POST /api/scan/webapp
 ```
 
-The production control-plane schema starts at
-`crates/baloncore-api/migrations/0001_saas_control_plane.sql`. The local
-workbench uses JSON files as a development adapter, but the model now mirrors a
-hosted SaaS layout: organizations, members, projects, scope contracts, assets,
-scan jobs, queue leases, worker nodes, job attempts, artifact records, evidence
-bundles, and audit events.
+A target SaaS schema is sketched at
+`crates/baloncore-api/migrations/0001_saas_control_plane.sql`. **It is not
+currently executed by any code in this repository** — there is no `sqlx`/
+`tokio_postgres` dependency, no Postgres adapter, no migration runner. The
+schema describes the eventual shape (organizations, members, projects, scope
+contracts, assets, scan jobs, queue leases, worker nodes, job attempts,
+artifact records, evidence bundles, audit events); the running storage layer is
+JSON files under `.baloncore/workbench/`.
 
 ## Local Lab
 

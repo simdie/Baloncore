@@ -101,3 +101,44 @@ Real `aes-gcm` integration with KMS-managed keys remains **NEEDS-HUMAN**: needs
 either a KMS endpoint + credentials, or a documented env-var convention for a
 master key, plus T2.b approval to add `aes-gcm` to `Cargo.toml`.
 
+---
+
+## T0.d — relabel the control plane honestly
+
+**Changed.**
+- README §"Enterprise Console" → §"Local Dev Workbench". States plainly: binds
+  to 127.0.0.1, no caller authentication, no tenant isolation, `authorized=true`
+  is a self-declared flag (not access control), evidence is obfuscated (not
+  encrypted), schema SQL is not executed by any code in this repo.
+- README bullet list of console capabilities: every "enterprise/multi-tenant/
+  durable worker" claim is now flagged as "JSON-on-disk, no isolation" or
+  "in-process, no real worker reclaim".
+- `status_payload` (`/api/status`) now reports:
+  - `mode = "single-tenant-local-dev"` (was `"rust-enterprise-api"`)
+  - `network_posture = "binds to 127.0.0.1 only; NO caller authentication and NO tenant isolation — anything that can reach the port can read every artifact; …"`
+  - `storage = "JSON files under .baloncore/workbench/ (no Postgres adapter; migrations SQL is NOT executed)"`
+  - `worker_runtime = "in-process job records; /api/workers/reconcile marks stale jobs failed but there is no real worker lease/heartbeat/exactly-once reclaim"`
+  - `evidence_at_rest = "obfuscated (XOR-with-constant-key) — NOT cryptographic"`
+  - `production_readiness = "NOT PRODUCTION-READY. Do not expose beyond 127.0.0.1."`
+- `security_command_center.why_it_stands_out[2]` rewritten from
+  "Enterprise-ready: tenant audit records…" to "Single-tenant local dev today:
+  scope contracts and evidence trust are part of the workflow, but the API has
+  no caller authentication or cross-tenant isolation. Enterprise-grade hosting
+  … is on the roadmap — see V0 §3 (P5 rows)."
+
+**Tests added** (`crates/baloncore-api/src/main.rs::tests`):
+- `status_payload_does_not_claim_capabilities_we_do_not_have` asserts the
+  `/api/status` payload contains NONE of `["rust-enterprise-api",
+  "Postgres-ready", "production-ready", "multi-tenant", "AES-256-GCM",
+  "encrypted at rest"]` and DOES contain `["single-tenant-local-dev",
+  "NO caller authentication", "NO tenant isolation", "NOT cryptographic",
+  "NOT PRODUCTION-READY"]`.
+
+**Mutation check.** Set `mode = "rust-enterprise-api"` (the V0-flagged
+overclaim) → RED. Restored → GREEN. Tests: 20 + 16 + 505 passing.
+
+**V0 verdict change.** P5.S0 "Postgres-ready" overclaim: NOW HONEST. P5.S1
+"multi-tenant, RBAC" overclaim: NOW HONEST (label-only; the *implementation*
+is still single-tenant — that's exactly what the label now says). P5.S3 worker
+reclaim overclaim: NOW HONEST.
+
