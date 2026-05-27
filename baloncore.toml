@@ -1,0 +1,65 @@
+[project]
+name = "baloncore-lab"
+description = "Authorized local target for BALONCORE validation."
+tags = [
+    "api",
+    "web",
+]
+
+[scope]
+allow_urls = ["http://localhost:3000"]
+allow_hosts = [
+    "localhost",
+    "127.0.0.1",
+]
+deny_hosts = []
+max_depth = 3
+
+[[auth_profiles]]
+name = "anonymous"
+role = "anonymous"
+description = "Unauthenticated baseline."
+object_markers = []
+
+[[auth_profiles]]
+name = "user_a"
+role = "user"
+description = "Standard low-privilege user."
+object_markers = ["user_a"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_USER_A_TOKEN"
+
+[[auth_profiles]]
+name = "user_b"
+role = "user"
+description = "Second low-privilege user for cross-account checks."
+object_markers = ["user_b", "user_b@example.test"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_USER_B_TOKEN"
+
+[[auth_profiles]]
+name = "admin"
+role = "admin"
+description = "Administrative control profile."
+object_markers = ["admin"]
+
+[auth_profiles.credential]
+bearer_token_env = "BALONCORE_ADMIN_TOKEN"
+
+[engines]
+web_api = true
+cloud_iam = false
+web3 = false
+
+# Optional false-positive/noise controls.
+# [[suppressions]]
+# id = "approved-admin-report-delegation"
+# reason = "Documented business workflow allows this role to read delegated reports."
+# endpoint = "GET /api/admin/reports/{id}"
+# classification = "broken_function_level_authorization"
+# profile = "user_a"
+# role = "user"
+# object_id = "*"
+# expires = "2026-12-31"

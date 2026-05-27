@@ -1,0 +1,91 @@
+{
+  "account_id": "123456789012",
+  "users": [
+    {
+      "name": "alice",
+      "arn": "arn:aws:iam::123456789012:user/alice",
+      "policies": ["admin-policy"],
+      "groups": ["admins"],
+      "attached_policies": []
+    }
+  ],
+  "groups": [
+    {
+      "name": "admins",
+      "arn": "arn:aws:iam::123456789012:group/admins",
+      "policies": ["admin-policy"],
+      "attached_policies": []
+    }
+  ],
+  "roles": [
+    {
+      "name": "DeployRole",
+      "arn": "arn:aws:iam::123456789012:role/DeployRole",
+      "policies": ["deploy-policy"],
+      "attached_policies": [],
+      "trust_policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": { "AWS": "arn:aws:iam::123456789012:user/github-actions" },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      }
+    }
+  ],
+  "policies": [
+    {
+      "name": "admin-policy",
+      "arn": "arn:aws:iam::aws:policy/AdminAccess",
+      "policy_type": "managed",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["*"],
+            "Resource": ["*"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "deploy-policy",
+      "policy_type": "inline",
+      "document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["ec2:*", "s3:GetObject"],
+            "Resource": ["*"]
+          }
+        ]
+      }
+    }
+  ],
+  "bucket_policies": [
+    {
+      "bucket": "public-data-bucket",
+      "arn": "arn:aws:s3:::public-data-bucket",
+      "policy": {
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::public-data-bucket/*"
+          }
+        ]
+      },
+      "public_access_block": {
+        "block_public_acls": false,
+        "ignore_public_acls": false,
+        "block_public_policy": false,
+        "restrict_public_buckets": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+name: BALONCORE Benchmark CI Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+jobs:
+  benchmark-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build BALONCORE
+        run: cargo build --release -p baloncore
+
+      - name: Run core tests
+        run: cargo test -p baloncore-core --lib
+
+      - name: Run CLI tests
+        run: cargo test -p baloncore
+
+      - name: Determinism check (fixture, k=2)
+        run: |
+          cargo run --release -p baloncore -- benchmark-determinism \
+            --suite baloncore-web-api-v1 \
+            --k 2 \
+            --output .baloncore/benchmark/determinism_web_api.json
+
+      - name: Eval gate (precision >= 0.70, decoy FP = 0, recall drop <= 0.10)
+        run: |
+          cargo run --release -p baloncore -- eval-gate \
+            --suite baloncore-web-api-v1 \
+            --min-precision 0.70 \
+            --max-decoy-fp 0 \
+            --max-recall-drop 0.10 \
+            --output .baloncore/benchmark/eval_gate.json
+
+      - name: Eval gate (cloud IAM suite)
+        run: |
+          cargo run --release -p baloncore -- eval-gate \
+            --suite baloncore-cloud-iam-v1 \
+            --min-precision 0.70 \
+            --max-decoy-fp 0 \
+            --max-recall-drop 0.10 \
+            --output .baloncore/benchmark/eval_gate_cloud_iam.json
+
+      - name: Eval gate (web3 suite)
+        run: |
+          cargo run --release -p baloncore -- eval-gate \
+            --suite baloncore-web3-v1 \
+            --min-precision 0.70 \
+            --max-decoy-fp 0 \
+            --max-recall-drop 0.10 \
+            --output .baloncore/benchmark/eval_gate_web3.json
+
+      - name: Eval gate (evidence suite)
+        run: |
+          cargo run --release -p baloncore -- eval-gate \
+            --suite baloncore-evidence-v1 \
+            --min-precision 0.70 \
+            --max-decoy-fp 0 \
+            --max-recall-drop 0.10 \
+            --output .baloncore/benchmark/eval_gate_evidence.json
+
+      - name: Benchmark CI gate (all suites)
+        run: |
+          chmod +x scripts/run_benchmarks.sh
+          ./scripts/run_benchmarks.sh --check-determinism --fail-on-regression

@@ -1,0 +1,16 @@
+/target/
+/.baloncore/
+node_modules/
+.pnpm-store/
+.next/
+apps/web/.next/
+apps/web/node_modules/
+apps/web/out/
+*.tsbuildinfo
+/.DS_Store
+__pycache__/
+*.pyc
+/.env
+/.env.*
+*.local
+!/configs/*.example.toml
