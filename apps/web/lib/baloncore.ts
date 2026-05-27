@@ -463,3 +463,27 @@ export type MetricsDrilldown = {
   total_entries: number;
   entries: MetricsDrilldownEntry[];
 };
+
+/// T3.d — typed fetchers for the /api/metrics/* endpoints.
+/// The dashboard's Program Health view consumes these and links every figure
+/// back to its source via `fetchMetricsDrilldown`.
+export async function fetchMetricsSummary(): Promise<MetricsSummary> {
+  return api<MetricsSummary>("/api/metrics/summary");
+}
+
+export async function fetchMetricsTrend(
+  metric: string,
+  bucket: string = "day"
+): Promise<MetricsTrend> {
+  const qs = new URLSearchParams({ metric, bucket }).toString();
+  return api<MetricsTrend>(`/api/metrics/trend?${qs}`);
+}
+
+export async function fetchMetricsDrilldown(
+  metric: string,
+  period?: string
+): Promise<MetricsDrilldown> {
+  const params = new URLSearchParams({ metric });
+  if (period) params.set("period", period);
+  return api<MetricsDrilldown>(`/api/metrics/drilldown?${params.toString()}`);
+}

@@ -12879,6 +12879,71 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // --- T3.d regression test --------------------------------------------------------
+    //
+    // V0_GROUND_TRUTH.md §3 P3.S3 flagged that the Next.js dashboard never
+    // called /api/metrics/{summary,trend,drilldown}. T3.d wired a Program
+    // Health section that does. This test pins the wiring by reading the
+    // committed dashboard page source and asserting it references each of
+    // the three endpoints plus the drill-down state machine.
+    #[test]
+    fn dashboard_program_health_calls_api_metrics_with_drilldown() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .expect("repo root");
+        let page = repo_root.join("apps/web/app/dashboard/page.tsx");
+        let lib = repo_root.join("apps/web/lib/baloncore.ts");
+
+        let page_src = fs::read_to_string(&page)
+            .unwrap_or_else(|e| panic!("read {}: {}", page.display(), e));
+        let lib_src = fs::read_to_string(&lib)
+            .unwrap_or_else(|e| panic!("read {}: {}", lib.display(), e));
+
+        for needed in [
+            "fetchMetricsSummary",
+            "fetchMetricsTrend",
+            "fetchMetricsDrilldown",
+            "/api/metrics/summary",
+            "/api/metrics/trend",
+            "/api/metrics/drilldown",
+        ] {
+            assert!(
+                lib_src.contains(needed),
+                "lib/baloncore.ts missing `{needed}` (T3.d)"
+            );
+        }
+
+        for needed in [
+            "fetchMetricsSummary",
+            "fetchMetricsDrilldown",
+            "program-health",
+            "openDrilldown",
+            "metrics.verified_findings_per_scan",
+        ] {
+            assert!(
+                page_src.contains(needed),
+                "dashboard/page.tsx missing `{needed}` — Program Health view \
+                 regressed; see PROGRESS.md T3.d"
+            );
+        }
+
+        for metric in [
+            "verified_findings_per_scan",
+            "false_positive_reduction_rate",
+            "time_to_proof",
+            "retest_success_rate",
+            "ci_blocked_criticals",
+            "tokens_per_verified",
+        ] {
+            assert!(
+                page_src.contains(&format!("openDrilldown(\"{metric}\")")),
+                "Program Health card for `{metric}` must call openDrilldown(\"{metric}\")"
+            );
+        }
+    }
+
     #[test]
     fn diligence_and_methodology_docs_do_not_reissue_retracted_headlines() {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

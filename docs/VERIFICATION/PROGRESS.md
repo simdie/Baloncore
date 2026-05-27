@@ -552,3 +552,56 @@ branch automatically.
 no placeholder bytes); whether it can be invoked on a given host depends
 on whether a PDF binary is installed there.
 
+---
+
+## T3.d — Program-Health dashboard view
+
+**Changed.**
+- `apps/web/lib/baloncore.ts` now exposes three typed fetchers:
+  `fetchMetricsSummary()`, `fetchMetricsTrend(metric, bucket?)`,
+  `fetchMetricsDrilldown(metric, period?)`. Each hits the corresponding
+  `/api/metrics/{summary,trend,drilldown}` endpoint via the existing `api()`
+  helper.
+- `apps/web/app/dashboard/page.tsx`:
+  - Imports `MetricsSummary`, `MetricsDrilldown`, `fetchMetricsSummary`,
+    `fetchMetricsDrilldown` from the lib.
+  - Adds `metrics`, `metricsError`, `drilldown`, `drilldownError`,
+    `drilldownLoading` state.
+  - `refreshAll()` now also fetches `/api/metrics/summary` (and stores the
+    error rather than fabricating a value when the rollup is empty — honest
+    empty state).
+  - Adds `openDrilldown(metric)` and `closeDrilldown()`.
+  - Renders a new `Program Health` section after the existing
+    `board-metrics` block. Six clickable stat cards (Verified findings/scan,
+    FP reduction rate, Median time to proof, Retest success rate,
+    CI-blocked criticals, Tokens/verified) — each `<button>` calls
+    `openDrilldown("<exact_metric_name>")`. A side panel reveals the first
+    10 drill-down entries from `/api/metrics/drilldown`.
+  - Loading and error states for both the summary and the drill-down panel.
+  - The pill `"source: /api/metrics/summary"` is shown at the top of the
+    section so reviewers can immediately see where the figures come from.
+
+**Tests added** (`crates/baloncore-cli/src/main.rs::tests`):
+- `dashboard_program_health_calls_api_metrics_with_drilldown` — reads the
+  committed `apps/web/lib/baloncore.ts` and `apps/web/app/dashboard/page.tsx`
+  and asserts:
+  - lib exports all three fetchers AND references all three endpoint paths.
+  - page imports `fetchMetricsSummary` + `fetchMetricsDrilldown`, has a
+    `program-health` test id, defines `openDrilldown`, and reads
+    `metrics.verified_findings_per_scan`.
+  - For each of the six promoted metrics, the page contains the literal
+    string `openDrilldown("<metric>")` — so every clickable figure is
+    actually wired to a drill-down call.
+
+**Mutation check.** Replaced the first `openDrilldown(...)` call in the page
+with `openDrilldownDISABLED(...)` →
+`dashboard_program_health_calls_api_metrics_with_drilldown` went RED.
+Restored from `/tmp/page.tsx.bak.t3d` → GREEN.
+
+**Web build status.** `pnpm typecheck` and `pnpm build` (Next 16.2.6 /
+Turbopack) both clean; 7 static pages emitted.
+
+**V0 verdict change.** P3.S3 dashboard "Program Health" view with drill-down:
+STUB/MISSING → **REAL**. Every figure is sourced from `/api/metrics/*` and
+is clickable to its drilldown source set.
+

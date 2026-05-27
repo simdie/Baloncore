@@ -7,10 +7,14 @@ import {
   ArtifactPreview,
   CommandCenter,
   JobRecord,
+  MetricsDrilldown,
+  MetricsSummary,
   SaasOverview,
   StatusPayload,
   api,
   compactPath,
+  fetchMetricsDrilldown,
+  fetchMetricsSummary,
   readinessLabel,
 } from "../../lib/baloncore";
 
@@ -27,6 +31,11 @@ export default function DashboardPage() {
   const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:3000");
   const [openapiUrl, setOpenapiUrl] = useState("http://127.0.0.1:3000/openapi.json");
   const [ownerProfile, setOwnerProfile] = useState("user_b");
+  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [drilldown, setDrilldown] = useState<MetricsDrilldown | null>(null);
+  const [drilldownError, setDrilldownError] = useState<string | null>(null);
+  const [drilldownLoading, setDrilldownLoading] = useState(false);
 
   const latest = jobs[0];
   const score =
@@ -68,6 +77,41 @@ export default function DashboardPage() {
     if (!repoPath && statusData.workbench_root) {
       setRepoPath(statusData.workbench_root.replace(/\/\.baloncore\/workbench$/, ""));
     }
+
+    // T3.d: Program Health metrics. /api/metrics/summary may legitimately
+    // return an empty rollup or 404 when no scan has been indexed yet — set
+    // metricsError so the UI shows an honest empty state instead of a fake
+    // figure.
+    try {
+      const summary = await fetchMetricsSummary();
+      setMetrics(summary);
+      setMetricsError(null);
+    } catch (err) {
+      setMetrics(null);
+      setMetricsError(String(err));
+    }
+  }
+
+  /// Open the drill-down panel for a metric. Calls /api/metrics/drilldown so
+  /// the dashboard never displays a clickable figure that lacks a verifiable
+  /// source.
+  async function openDrilldown(metric: string) {
+    setDrilldownLoading(true);
+    setDrilldownError(null);
+    try {
+      const dd = await fetchMetricsDrilldown(metric);
+      setDrilldown(dd);
+    } catch (err) {
+      setDrilldown(null);
+      setDrilldownError(String(err));
+    } finally {
+      setDrilldownLoading(false);
+    }
+  }
+
+  function closeDrilldown() {
+    setDrilldown(null);
+    setDrilldownError(null);
   }
 
   useEffect(() => {
@@ -218,6 +262,157 @@ export default function DashboardPage() {
               <small>{metric.unit}</small>
             </div>
           ))}
+        </section>
+
+        {/* T3.d — Program Health: every figure comes from /api/metrics/* and is
+            clickable to /api/metrics/drilldown. No figure may be rendered
+            without a verifiable source. */}
+        <section className="panel-neo" id="program-health" data-testid="program-health">
+          <div className="panel-head">
+            <div>
+              <span className="eyebrow">Program Health</span>
+              <h2>Metrics from /api/metrics</h2>
+            </div>
+            <span className="mini-pill" data-testid="metrics-source-pill">
+              source: /api/metrics/summary
+            </span>
+          </div>
+
+          {metricsError && (
+            <div className="action-row" data-testid="metrics-error">
+              <span />
+              <p>
+                Metrics unavailable (this usually means no scan has been indexed
+                yet). Last error: <code>{metricsError}</code>
+              </p>
+            </div>
+          )}
+
+          {!metrics && !metricsError && (
+            <div className="action-row" data-testid="metrics-loading">
+              <span />
+              <p>Loading /api/metrics/summary…</p>
+            </div>
+          )}
+
+          {metrics && (
+            <>
+              <div className="stat-grid program-health-grid">
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-vfps"
+                  onClick={() => openDrilldown("verified_findings_per_scan")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=verified_findings_per_scan"
+                >
+                  <span>Verified findings/scan</span>
+                  <strong>{metrics.verified_findings_per_scan.toFixed(2)}</strong>
+                  <small>across {metrics.total_scans} scans</small>
+                </button>
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-fprr"
+                  onClick={() => openDrilldown("false_positive_reduction_rate")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=false_positive_reduction_rate"
+                >
+                  <span>FP reduction rate</span>
+                  <strong>
+                    {(metrics.false_positive_reduction_rate * 100).toFixed(1)}%
+                  </strong>
+                  <small>{metrics.rejected_hypotheses} rejected</small>
+                </button>
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-ttp"
+                  onClick={() => openDrilldown("time_to_proof")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=time_to_proof"
+                >
+                  <span>Median time to proof</span>
+                  <strong>
+                    {metrics.time_to_proof.sample_count > 0
+                      ? `${metrics.time_to_proof.median_ms.toFixed(0)}ms`
+                      : "n/a"}
+                  </strong>
+                  <small>{metrics.time_to_proof.sample_count} samples</small>
+                </button>
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-rsr"
+                  onClick={() => openDrilldown("retest_success_rate")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=retest_success_rate"
+                >
+                  <span>Retest success rate</span>
+                  <strong>{(metrics.retest_success_rate * 100).toFixed(1)}%</strong>
+                  <small>across fixed findings</small>
+                </button>
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-cbc"
+                  onClick={() => openDrilldown("ci_blocked_criticals")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=ci_blocked_criticals"
+                >
+                  <span>CI-blocked criticals</span>
+                  <strong>{metrics.ci_blocked_criticals}</strong>
+                  <small>severity=critical, state=open</small>
+                </button>
+                <button
+                  type="button"
+                  className="stat-card stat-card-clickable"
+                  data-testid="program-health-tokens"
+                  onClick={() => openDrilldown("tokens_per_verified")}
+                  title="Click to drill down: /api/metrics/drilldown?metric=tokens_per_verified"
+                >
+                  <span>Tokens / verified</span>
+                  <strong>{metrics.tokens_per_verified.toFixed(0)}</strong>
+                  <small>{metrics.model_calls_per_verified.toFixed(1)} calls/verified</small>
+                </button>
+              </div>
+
+              {drilldown && (
+                <div className="panel-neo drilldown-panel" data-testid="metrics-drilldown">
+                  <div className="panel-head">
+                    <div>
+                      <span className="eyebrow">Drill-down</span>
+                      <h3>
+                        {drilldown.metric} — {drilldown.total_entries} source entries
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={closeDrilldown}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  {drilldownLoading && <p>Loading…</p>}
+                  {drilldownError && (
+                    <p data-testid="metrics-drilldown-error">
+                      Drill-down unavailable: <code>{drilldownError}</code>
+                    </p>
+                  )}
+                  {!drilldownLoading && !drilldownError && drilldown.entries.length === 0 && (
+                    <p>No source entries for this metric yet.</p>
+                  )}
+                  {drilldown.entries.length > 0 && (
+                    <ul className="drilldown-entries">
+                      {drilldown.entries.slice(0, 10).map((entry) => (
+                        <li key={`${entry.scan_id}-${entry.metric}-${entry.computed_at}`}>
+                          <code>{entry.scan_id}</code> · {entry.metric}={" "}
+                          <strong>{entry.value}</strong> · findings:{" "}
+                          {entry.findings_count}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </section>
 
         <section className="two-column" id="run">
