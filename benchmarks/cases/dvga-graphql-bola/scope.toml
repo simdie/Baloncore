@@ -1,0 +1,8 @@
+# BALONCORE scope contract authorizing scans of the locally-vendored DVGA target.
+[scope]
+allow_urls = ["http://127.0.0.1:5013"]
+allow_hosts = ["127.0.0.1", "localhost"]
+deny_hosts = []
+max_depth = 3
+authorized = true
+notes = "Locally-run dolevf/dvga Docker image (MIT) booted by bench-dvga on 127.0.0.1:5013. Do not point this scope at any other host."

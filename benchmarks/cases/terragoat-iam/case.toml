@@ -1,0 +1,34 @@
+# P2.S3 external corpus — bridgecrewio/TerraGoat static-IaC bench case
+#
+# Unlike the HTTP targets (VAmPI/DVGA/crAPI), TerraGoat is a STATIC Terraform
+# (HCL) corpus analyzed OFFLINE — no server, no Docker, no daemon, no network at
+# analysis time. bench-terragoat parses the vendored `.tf` files into an IAM
+# graph (the HCL ingestor in cloud_providers::terraform_hcl) and runs the same
+# analyze-cloud-iam detection the product ships (public exposure, over-privileged
+# IAM), then scores findings against the hand-labelled ground truth.
+
+id = "terragoat-iam"
+name = "TerraGoat: open security group + over-privileged IAM (offline IaC)"
+kind = "cloud_iam"
+
+# --- provenance (verified May 2026; opened the LICENSE file, did not assume) ---
+source = "https://github.com/bridgecrewio/terragoat"
+source_commit = "729f8da62c6a85ce4af5ad3d123de97776d954c4"   # 2023-04-27
+license = "Apache-2.0"                                        # SPDX, verified in repo LICENSE
+authorized = true
+
+# --- how the target is obtained and analyzed ---
+# Vendored via scripts/fetch_terragoat.sh (git clone at the pinned commit into
+# the gitignored .baloncore/corpus/). Analysis is pure file parsing.
+fetch_script = "scripts/fetch_terragoat.sh"
+terragoat_dir = ".baloncore/corpus/terragoat/terragoat"
+# The .tf files fed to the analyzer: real TerraGoat resources (planted vulns +
+# the encrypted-bucket decoy) plus BALONCORE negative controls.
+analyzed_files = [
+  "terraform/aws/ec2.tf",
+  "terraform/aws/iam.tf",
+  "terraform/aws/s3.tf",
+]
+negative_controls = "benchmarks/cases/terragoat-iam/negative_controls.tf"
+provider = "aws"
+run_method = "offline HCL parse -> IAMGraph::analyze() (no terraform binary, no cloud account)"

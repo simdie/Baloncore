@@ -1,0 +1,11 @@
+# BALONCORE scope contract for the offline Cfngoat CloudFormation analysis.
+#
+# Analyzed entirely offline (static template parsing). No network target, no
+# deployed cloud resources.
+[scope]
+allow_urls = []
+allow_hosts = []
+deny_hosts = ["*"]
+max_depth = 0
+authorized = true
+notes = "Offline static CloudFormation analysis of locally-fetched bridgecrewio/Cfngoat (no license — fetch-only, not redistributed). analyze-cloud-iam only parses .yaml templates. Never deploy these resources."

@@ -9,6 +9,7 @@ live-models = ["baloncore-core/live-models"]
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 baloncore-core = { path = "../baloncore-core" }
 clap = { workspace = true }
 ed25519-dalek = { workspace = true }

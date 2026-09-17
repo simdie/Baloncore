@@ -1,0 +1,49 @@
+# P2.S3 external corpus — VAmPI BOLA-on-books bench case
+#
+# VAmPI (erev0s/VAmPI) is a Flask "vulnerable API" with a global on/off switch
+# (`vulnerable=1` vs `vulnerable=0`). The `bench-vampi` runner boots BOTH a
+# vulnerable instance and a secure instance of the SAME target and drives the
+# identical BOLA probe at each through the real BolaValidator:
+#   - vulnerable build: a non-owner reading another user's book secret SUCCEEDS
+#     (HTTP 200 + secret) => the planted true positive.
+#   - secure build: the same probe is owner-scoped and returns 404 => the bug is
+#     OFF, so the validator must stay silent. This is the decoy / negative set.
+# Same endpoints, bug toggled off, must produce ZERO findings — that is the
+# cleanest possible false-positive measurement.
+
+id = "vampi-bola-books"
+name = "VAmPI: BOLA on /books/v1/{book} (vulnerable vs secure toggle)"
+kind = "web_api"
+
+# --- provenance (verified May 2026; checked the LICENSE file, did not assume) ---
+source = "https://github.com/erev0s/VAmPI"
+source_commit = "f16052dce83f05847133ec98f01c5193a41de7d8"   # 2026-04-07
+license = "MIT"                                              # SPDX, verified in repo LICENSE
+license_note = "The corpus shortlist guessed GPL-3.0; the actual LICENSE file is MIT. SPDX recorded from the file, not assumed."
+authorized = true
+
+# --- how the target is obtained and run ---
+# Vendored out-of-tree (under gitignored .baloncore/) via scripts/fetch_vampi.sh,
+# which clones the pinned commit and pip-installs VAmPI's 2022-era requirements
+# into a venv. Docker is the upstream-documented path but the daemon was not
+# available in this environment; the native Flask boot is used instead.
+fetch_script = "scripts/fetch_vampi.sh"
+vampi_dir = ".baloncore/corpus/vampi/VAmPI"
+run_method = "native-flask (python venv); docker image erev0s/vampi:latest is the upstream alternative"
+
+# The runner boots two instances sequentially (they share one sqlite file, so
+# they must not run concurrently from the same checkout).
+vulnerable_port = 5001
+secure_port = 5002
+
+# --- probe identities ---
+# VAmPI ships seed users name1/name2/admin (passwords pass1/pass2/pass1). The
+# runner logs in name1 (owner) and name2 (attacker) at runtime to obtain JWTs;
+# there are NO pre-shared bearer tokens for this target.
+owner_profile = "name1"
+attacker_profile = "name2"
+
+# The runner plants a book with a fixed title + secret as `name1` so the probe
+# is deterministic (VAmPI's seed book titles are randomised).
+planted_book_title = "baloncore-bola-probe"
+planted_secret = "BALONCORE_PLANTED_SECRET"

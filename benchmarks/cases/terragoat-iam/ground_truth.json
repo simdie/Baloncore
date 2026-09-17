@@ -1,0 +1,62 @@
+{
+  "case_id": "terragoat-iam",
+  "description": "Hand-labelled ground truth for the bridgecrewio/TerraGoat static IaC target, analyzed OFFLINE (no server, no daemon) by analyze-cloud-iam via the HCL ingestor. Each probe names a Terraform resource address; bench-terragoat matches an analyze-cloud-iam finding to it by affected_resource. expected_label is what the analyzer MUST conclude. Planted vulns are real TerraGoat resources; decoys include real TerraGoat resources AND BALONCORE negative controls (correctly-configured resources the analyzer must NOT flag). Checkov rule IDs are recorded as stable cross-tool identifiers.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/bridgecrewio/terragoat",
+  "source_commit": "729f8da62c6a85ce4af5ad3d123de97776d954c4",
+  "license": "Apache-2.0",
+  "vulnerabilities": [
+    {
+      "id": "vuln-open-security-group-web-node",
+      "resource_address": "aws_security_group.web-node",
+      "classification": "PublicResourceExposure",
+      "checkov_rule_id": "CKV_AWS_24",
+      "source_file": "terraform/aws/ec2.tf",
+      "expected_label": "TruePositive",
+      "rationale": "TerraGoat ec2.tf aws_security_group.web-node has ingress rules opening ports 22/80 and all ports to 0.0.0.0/0 (Checkov CKV_AWS_24: SSH open to the internet). The HCL ingestor marks the SG public; analyze-cloud-iam's public-exposure check flags it.",
+      "expected_evidence_substrings": ["0.0.0.0/0"]
+    },
+    {
+      "id": "vuln-overprivileged-user-policy",
+      "resource_address": "aws_iam_user_policy.userpolicy",
+      "classification": "OverPrivilegedPolicy",
+      "checkov_rule_id": "CKV_AWS_287",
+      "source_file": "terraform/aws/iam.tf",
+      "expected_label": "TruePositive",
+      "rationale": "TerraGoat iam.tf aws_iam_user_policy.userpolicy grants Action ec2:*/s3:*/lambda:*/cloudwatch:* on Resource '*' (wildcard admin). The ingestor links the inline policy to aws_iam_user.user; analyze-cloud-iam's over-privileged check (wildcard actions/resource) flags it.",
+      "expected_evidence_substrings": ["*"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-encrypted-private-logs-bucket",
+      "resource_address": "aws_s3_bucket.logs",
+      "classification": "BlockedAsExpected",
+      "checkov_rule_id": null,
+      "source_file": "terraform/aws/s3.tf",
+      "expected_label": "TrueNegative",
+      "rationale": "TerraGoat's logs bucket is acl='log-delivery-write' (not public-read) with KMS server-side encryption and versioning — a correctly-configured bucket. analyze-cloud-iam must NOT flag it as publicly exposed. A naive scanner that flags every S3 bucket would false-positive here.",
+      "expected_evidence_substrings": []
+    },
+    {
+      "id": "decoy-least-privilege-policy",
+      "resource_address": "aws_iam_user_policy.scoped",
+      "classification": "BlockedAsExpected",
+      "checkov_rule_id": null,
+      "source_file": "benchmarks/cases/terragoat-iam/negative_controls.tf",
+      "expected_label": "TrueNegative",
+      "rationale": "BALONCORE negative control: a least-privilege inline policy (s3:GetObject on one specific ARN, no wildcards) linked to a user. The over-privileged check must NOT fire. This is the credibility-critical cloud false positive — flagging a scoped policy as over-privileged.",
+      "expected_evidence_substrings": []
+    },
+    {
+      "id": "decoy-internal-security-group",
+      "resource_address": "aws_security_group.internal",
+      "classification": "BlockedAsExpected",
+      "checkov_rule_id": null,
+      "source_file": "benchmarks/cases/terragoat-iam/negative_controls.tf",
+      "expected_label": "TrueNegative",
+      "rationale": "BALONCORE negative control: a security group whose only ingress is restricted to 10.0.0.0/8 (no 0.0.0.0/0). The public-exposure check must NOT fire. Mirrors the open-SG planted vuln with the misconfiguration removed.",
+      "expected_evidence_substrings": []
+    }
+  ]
+}

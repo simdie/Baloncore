@@ -1,0 +1,48 @@
+# P2.S3 external corpus — OWASP crAPI BOLA bench case
+#
+# crAPI is a multi-service (Docker Compose) intentionally-vulnerable API. The
+# `bench-crapi` runner brings the whole stack up, drives crAPI's flagship BOLA
+# (Challenge 1: read another user's vehicle location by GUID) through the real
+# BolaValidator, scores it against the hand-labelled ground truth, and tears the
+# WHOLE stack (containers + volumes) down on every exit path.
+#
+# The endpoint GET /identity/api/v2/vehicle/{carId}/location is literally named
+# `getLocationBOLA` in the source and performs NO ownership check, so any
+# authenticated user can read any vehicle's location by GUID. Seed users and
+# their vehicle GUIDs are deterministic (baked into the identity service's
+# TestUsers.java), so the scan is reproducible.
+
+id = "crapi-bola-vehicle"
+name = "crAPI: BOLA on /identity/api/v2/vehicle/{carId}/location (Challenge 1)"
+kind = "web_api"
+
+# --- provenance (verified May 2026; opened the LICENSE file, did not assume) ---
+source = "https://github.com/OWASP/crAPI"
+source_commit = "d1cbf263a310ea4ed342e44a21a3ea32431e8ea6"   # git tag v1.1.6-rc8
+license = "Apache-2.0"                                        # SPDX, verified in repo LICENSE.md
+authorized = true
+
+# --- how the target is obtained and run ---
+# Vendored out-of-tree via scripts/fetch_crapi.sh: clones the source at the
+# pinned commit (matching the published image tag) and `docker compose pull`s
+# the stack pinned to crapi/*:1.1.6-rc8. The runner brings the base compose up
+# and tears it down. No `1.1.5`/`1.1.6` images are published; rc8 is the latest
+# concrete tag, and the vendored source is the matching git tag so source ==
+# runtime. The live stack's seed users + GUIDs were confirmed to match the
+# pinned source.
+fetch_script = "scripts/fetch_crapi.sh"
+crapi_dir = ".baloncore/corpus/crapi/crAPI"
+compose_file = "deploy/docker/docker-compose.yml"
+image_version = "1.1.6-rc8"
+run_method = "docker compose up (multi-service); web nginx proxies /identity,/workshop,/community"
+host_port = 8888
+
+# --- deterministic seed identities (identity service TestUsers.java) ---
+# Owner Adam owns vehicle f89b5f21-... at 32.778889,-91.919243. Attacker Pogba is
+# a different seed user. Both are ROLE_PREDEFINE (pre-verified, can log in
+# directly with no email/OTP step).
+owner_email = "adam007@example.com"
+owner_password = "adam007!123"
+owner_vehicle_guid = "f89b5f21-7829-45cb-a650-299a61090378"
+attacker_email = "pogba006@example.com"
+attacker_password = "pogba006!123"

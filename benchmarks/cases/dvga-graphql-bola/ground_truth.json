@@ -1,0 +1,58 @@
+{
+  "case_id": "dvga-graphql-bola",
+  "description": "Hand-labelled ground truth for the dolevf/DVGA external target (GraphQL JWT-identity authorization bypass). Each probe is driven through the real GraphQlBolaValidator by bench-dvga. A probe matches a runner observation on (operation, object_id, attacker_profile). expected_label is what the validator MUST conclude. The two decoys are realistic operations a naive cross-id scanner would flag but that are actually safe.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application",
+  "source_commit": "a961308c02d1fb462b192681c336b0739e432da7",
+  "image": "dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957",
+  "license": "MIT",
+  "vulnerabilities": [
+    {
+      "id": "vuln-jwt-forge-admin-password",
+      "class": "BrokenObjectLevelAuthorization",
+      "operation": "me",
+      "object_id": "admin",
+      "owner_profile": "admin-legit",
+      "attacker_profile": "operator-forging-admin",
+      "owner_identity": "admin",
+      "owner_login_password": "changeme",
+      "attacker_forged_identity": "admin",
+      "owner_markers": ["changeme"],
+      "expected_label": "TruePositive",
+      "rationale": "core/helpers.py:20-21 (get_identity) decodes the JWT with verify_signature=False; core/views.py:60-65 (UserObject.resolve_password) returns the REAL password when request identity == 'admin'. A principal who does not know admin's password forges an unsigned {\"identity\":\"admin\"} token and reads admin's real password 'changeme' via me(token){password}. Cross-principal access to another user's secret = GraphQL BOLA. Owner baseline uses a legitimately-issued admin token.",
+      "expected_evidence_substrings": ["changeme"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-nonadmin-identity-masked",
+      "class": "BlockedAsExpected",
+      "operation": "me",
+      "object_id": "admin",
+      "owner_profile": "admin-legit",
+      "attacker_profile": "operator-forging-operator",
+      "owner_identity": "admin",
+      "owner_login_password": "changeme",
+      "attacker_forged_identity": "operator",
+      "owner_markers": ["changeme"],
+      "expected_label": "TrueNegative",
+      "rationale": "Forging a NON-privileged identity (operator) does NOT leak admin's secret: resolve_password masks the password to '******' for any identity != 'admin', so the attacker response never contains 'changeme'. A scanner that flags any populated `password` field would false-positive here. The validator finds no owner marker in the attacker body and body_similarity ~0.62 < 0.70 -> Rejected.",
+      "expected_evidence_substrings": []
+    },
+    {
+      "id": "decoy-public-paste",
+      "class": "BlockedAsExpected",
+      "operation": "paste",
+      "object_id": "12",
+      "owner_profile": "anonymous",
+      "attacker_profile": "operator",
+      "owner_identity": null,
+      "owner_login_password": null,
+      "attacker_forged_identity": "operator",
+      "owner_markers": ["Mind your own business"],
+      "expected_label": "TrueNegative",
+      "rationale": "paste(id:12) is public:true and unauthenticated — readable by anyone, including the anonymous probe. The validator observes the anonymous request also succeed with a near-identical body and Rejects (public data is not a cross-user BOLA). A naive cross-id scanner would flag the 200.",
+      "expected_evidence_substrings": []
+    }
+  ]
+}

@@ -5,6 +5,166 @@ Mutation-check: "broke X → red → restored → green" recorded explicitly whe
 
 ---
 
+## A0 — Active-finding foundation (Vertical A campaign; NO vuln class yet)
+
+**Changed.** New module `crates/baloncore-core/src/active_finder.rs` — the shared
+substrate every active finder will build on, mirroring the `BolaValidator`
+firewall contract so evidence sealing works unchanged. Adds NO vuln class.
+
+- **`ActiveFinder` trait** + decision shape: `FinderDecision = Verified(ActiveProof)
+  | Rejected(RejectedHypothesis) | Inconclusive(String)`. `ActiveProof` carries a
+  `ProofKind` enumerating the only deterministic signals allowed
+  (`OutOfBandCallback`, `BooleanDifferential`, `TimingDifferential`,
+  `ForgedTokenAccess`, `StateChange`) — never "the payload reflected". Reuses
+  `web_api::RejectedHypothesis` so the firewall/evidence layers are unchanged.
+- **`FinderContext`** — the only way a finder touches the network. Bundles the
+  target, auth profiles, the real `HttpRequestRunner`, a `ScopeGuard`, a
+  `ProbeBudget`, and (optionally) the OOB collaborator. `send`/`send_json`
+  enforce scope (refuse + don't send if out of scope) and budget (one unit per
+  request) on EVERY probe, and return a `ProbeObservation` with timing (since
+  `HttpExchange` has no duration field).
+- **`ProbeBudget`** — per-scan probe + wall-clock ceiling (mirrors the
+  `ModelBudget` pattern); `try_consume` fails closed on either cap.
+- **`OobCollaborator`** — a local out-of-band HTTP sink (std `TcpListener`, no new
+  deps), `127.0.0.1` by default (`start_on(host)` for authorized remote use). Mints
+  correlation tokens, exposes `payload_url(token)`, records each inbound request as
+  an `OobInteraction`, `wait_for(token, timeout)` for blind proofs, and seals each
+  interaction as an `EvidenceRecord` (RuntimeObservation, SafeToShare). Drop stops
+  the server thread.
+- **`differential`** — pure control-vs-test comparator with stable thresholds
+  (`DifferentialConfig`: body-similarity 0.85 via token-Jaccard; timing requires
+  BOTH ratio ≥3× AND absolute gap ≥500ms, so jitter never registers).
+
+**Tests added** (`active_finder.rs::tests`, 8): OOB sink records a real
+server-side callback (and seals evidence) + ignores unrelated tokens; differential
+flags a planted boolean difference (status or distinct body) and a planted time
+difference, and IGNORES body noise (one extra token) and timing jitter
+(100→140ms, and a big-ratio/tiny-abs case); `FinderContext` refuses an
+out-of-scope send WITHOUT consuming budget (a link-local metadata URL is blocked);
+budget exhaustion is enforced. The OOB tests skip cleanly if a local socket can't
+be bound.
+
+**Mutation check (differential threshold).** Collapsed the timing thresholds to
+`min_time_ratio: 1.0, min_time_abs_ms: 0` → `differential_ignores_timing_jitter`
+went RED (`time 100ms->140ms … differs=true`). Restored from
+`/tmp/active_finder.rs.bak` → GREEN (8/8).
+
+**Verify.** `cargo fmt --check` exit 0; `cargo test -p baloncore-core --lib` 585
+passed (577 + 8 new), CLI 25 passed; no warnings in the new module.
+
+**V0 verdict change.** Vertical-A active-finding substrate: ABSENT → **REAL
+(foundation)**. No vuln class added yet (per A0 scope). A1 (JWT/auth-token flaws)
+is the first finder to build on this — it will implement `ActiveFinder`, use
+`FinderContext` for forged-token access, and prove on DVGA + VAmPI.
+
+---
+
+## A1 — JWT / auth-token flaw finder (first `ActiveFinder`, proven on DVGA + VAmPI)
+
+**Changed.** New module `crates/baloncore-core/src/jwt_auth_finder.rs` — the first
+`ActiveFinder`, generalizing the DVGA `verify_signature=False` bug + VAmPI's
+weak-HMAC-secret bypass into a finder.
+
+- **Forging primitives (no new deps):** `forge_alg_none`, `forge_stripped_signature`,
+  `forge_hs256` (HMAC-SHA256 implemented over `sha2`, validated against an RFC 4231
+  vector), `forge_claim_tamper` (keep an issued token's signature, swap claims),
+  `decode_payload`. base64url via the existing `base64` dep.
+- **`JwtAuthFinder` (ActiveFinder):** given a `JwtAuthCase` (endpoint, token
+  injection — `BearerHeader` or GraphQL `{TOKEN}` arg — control token, escalate
+  claim, technique list, weak-secret wordlist, victim markers) it runs control +
+  anonymous baselines once, then per technique forges a token escalating the
+  identity/role and re-accesses. Techniques: AlgNone, StripSignature,
+  WeakSecretHmac (bounded wordlist brute), AlgConfusion (HS256 with RSA pubkey as
+  secret), ClaimTamper. The forged token is **redacted** in sealed evidence (only
+  the technique/variant label is recorded).
+- **The proof guard `forged_access_proven` (the A1 firewall):** Verified ONLY when
+  the forged response is success-like AND carries a victim marker, the control
+  (original identity) response does NOT, AND the anonymous response does NOT.
+  "Request accepted" alone never verifies; a forged token that is rejected, or
+  that returns only data anyone already sees, is `Rejected`.
+- **Scorer:** `jwt_suite` + `score_jwt_run` (scenario id → Verified? → TP/TN/FP/FN
+  via `jwt_prediction`), producing a `BenchmarkRun` the existing `eval_gate`
+  scores. Decoy hits fail the gate.
+- **CLI:** `bench-jwt-dvga` (boots the pinned DVGA image, GraphQL injection) and
+  `bench-jwt-vampi` (boots the vulnerable VAmPI venv, logs in name2 for the
+  control, bearer injection). Each builds cases, runs the finder, scores, tears
+  the target down. NEEDS-HUMAN errors if the target isn't vendored.
+
+**Real measured result.**
+- `bench-jwt-dvga`: `vuln-forge-admin-identity` → **TruePositive** (forged
+  `{identity:admin}` alg=none token leaked admin password `changeme`; operator
+  control masked, anonymous errored); `decoy-public-paste` → **TrueNegative**
+  (public content — anonymous already sees it).
+- `bench-jwt-vampi`: `vuln-weak-secret-hmac-admin` → **TruePositive** (weak secret
+  `random` brute-forced; forged `sub=admin` HS256 token → `/me` returned
+  `admin@mail.com`; control name2 = 200 without the marker; anon = 401);
+  `decoy-algnone-rejected` → **TrueNegative** (VAmPI verifies the signature → 401);
+  `decoy-public-users` → **TrueNegative** (`/users/v1` lists `admin@mail.com`
+  anonymously → no escalation).
+Both targets Verified; all three decoys Rejected; precision/recall 100% on both.
+
+**Tests added.**
+- `jwt_auth_finder.rs::tests` (13): forging correctness (alg=none shape, HS256
+  keyed+deterministic, RFC-4231 HMAC vector, claim-tamper keeps sig); the proof
+  guard (verifies real cross-identity access; **rejects the public-endpoint decoy**
+  where anonymous also sees the marker; rejects a refused forged token; rejects
+  accepted-but-no-victim-data); the prediction matrix; scorer happy-path +
+  decoy-FP-fails-gate + clean-run-passes-gate.
+- `tests/bench_jwt_dvga_lab.rs` + `tests/bench_jwt_vampi_lab.rs` — end-to-end
+  integration tests against the real targets (distinct ports 5082 / 5003 to avoid
+  collisions in `cargo test --workspace`); skip (NEEDS-HUMAN) if the target is not
+  vendored. Both green.
+
+**Mutation check (the forged-token-access guard).** Replaced
+`forged_access_proven`'s body with `forged_succeeded` alone (drop the victim-marker
+/ control / anonymous clauses, so "request accepted" verifies) →
+`guard_rejects_public_endpoint_anonymous_also_sees_marker` AND
+`guard_rejects_accepted_but_no_victim_data` went RED. Restored from
+`/tmp/jwt_auth_finder.rs.bak` → GREEN (13/13).
+
+**Verify.** `cargo fmt --check` exit 0; `cargo test -p baloncore-core --lib` 598
+passed (585 + 13 new); CLI 25 passed; `cargo clippy -p baloncore-core` no errors.
+
+**V0 verdict change.** Vertical-A JWT/auth-token class: ABSENT → **REAL** — proven
+on two real external targets (DVGA signature-not-verified; VAmPI weak-HMAC-secret),
+with correctly-rejecting and public-endpoint decoys held out, the model-proposes/
+validator-proves firewall intact (only `forged_access_proven` seals Verified), and
+the forged token redacted in evidence.
+
+---
+
+## P2.S3 external benchmark corpus — COMPLETE (5/5 REAL) — consolidation summary
+
+The external benchmark corpus is complete: five independent, vendored, intentionally-
+vulnerable targets are each brought up (or parsed offline) by a dedicated `bench-*`
+command, probed through BALONCORE's real validators/analyzers, and scored against a
+hand-labelled ground truth with realistic decoys — **VAmPI** (REST BOLA via the
+vulnerable/secure toggle, MIT, `f16052dc`), **DVGA** (GraphQL JWT-identity auth bypass,
+MIT, `a961308c`), **crAPI** (multi-service vehicle-location BOLA, Apache-2.0, `d1cbf263`,
+full-stack readiness wait + whole-stack teardown), **TerraGoat** (offline Terraform HCL,
+Apache-2.0, `729f8da6`), and **Cfngoat** (offline CloudFormation, **NOASSERTION** — no
+upstream license, so fetch-only and never redistributed, `0c09b69c`). Every SPDX id was
+read from the actual LICENSE file, not assumed (two shortlist guesses were corrected:
+VAmPI is MIT not GPL; Cfngoat has no license at all). Fresh runs of all five give an
+aggregate **precision 100%, recall 100%, 9 TP, 0 FN, decoy false-positives 0/11** —
+the combined scorecard + machine-readable leaderboard are written to
+`.baloncore/corpus-scorecard/{combined_scorecard.md,leaderboard.json}` by
+`scripts/corpus_scorecard.py`. Each target has scorer unit tests with a red-on-break
+mutation check and a live integration test that skips cleanly (NEEDS-HUMAN) when the
+target isn't vendored. Two genuine product-capability gaps were closed along the way
+(offline Terraform-HCL ingestion in `terraform_hcl.rs`; CloudFormation intrinsic parsing
++ Users/Groups policy linkage + security-group detection in `cloudformation.rs`).
+Consolidation checks recorded verbatim: `cargo build --workspace` ok (1 pre-existing
+unused-import warning); `cargo test --workspace` and `cargo test --features live-models`
+both exit 0 (all binaries green incl. live labs; the live-models lib build runs 586 unit
+tests); `cargo fmt --check` exit 0; `cargo clippy --all-targets` exit 0 (style warnings
+only, no errors). One test-harness fix was required for determinism: the DVGA and VAmPI
+lab tests both defaulted to port 5071 and clashed when the whole suite ran the live-lab
+tests concurrently — the DVGA lab test now uses 5081, after which `cargo test --workspace`
+is deterministically green.
+
+---
+
 ## T0.a — `benchmark-ci` shortcut removed
 
 **Changed.** All six production callers of `generate_golden_baseline` now require real
@@ -604,4 +764,469 @@ Turbopack) both clean; 7 static pages emitted.
 **V0 verdict change.** P3.S3 dashboard "Program Health" view with drill-down:
 STUB/MISSING → **REAL**. Every figure is sourced from `/api/metrics/*` and
 is clickable to its drilldown source set.
+
+---
+
+## P2.S3 (corpus #1) — VAmPI external target, real scan + score
+
+**Target.** `erev0s/VAmPI` (Flask "vulnerable API" with a global
+`vulnerable=1/0` switch). First external corpus target wired to the `bench-saas`
+template.
+
+**Provenance, checked not assumed.**
+- Repo exists; pinned commit `f16052dce83f05847133ec98f01c5193a41de7d8`
+  (2026-04-07).
+- **License = MIT** (SPDX), read directly from the repo `LICENSE` file. The
+  corpus shortlist *guessed* GPL-3.0; it is wrong. `case.toml` records `MIT`
+  and a `license_note` calling out the correction.
+
+**Vendoring.** [`scripts/fetch_vampi.sh`](scripts/fetch_vampi.sh) clones the
+pinned commit into the gitignored `.baloncore/corpus/vampi/`, re-checks the
+LICENSE header still says MIT, and pip-installs VAmPI's 2022-era pins into a
+venv (Python 3.9–3.12; 3.14 is too new for Flask 2.2.2 / connexion 2.14.2). This
+is the one NEEDS-HUMAN step (network + pip); after it, `bench-vampi` is fully
+local. Docker is the upstream-documented path but the daemon was unavailable in
+this environment, so the native Flask boot is used.
+
+**Case files** under
+[`benchmarks/cases/vampi-bola-books/`](benchmarks/cases/vampi-bola-books/):
+`case.toml`, `scope.toml` (authorises 127.0.0.1:5001/5002 only), and
+`ground_truth.json` — one planted vuln + **two** decoys:
+- `vuln-bola-books-vulnerable` (TruePositive): on the VULNERABLE build, `name2`
+  reads `name1`'s book secret via `GET /books/v1/{book}` (books.py:50-58, no
+  owner filter when `vuln=1`).
+- `decoy-bola-books-secure` (TrueNegative): the SAME probe on the SECURE build
+  (`vuln=0`, owner-scoped query → 404). This is the toggle-based negative set —
+  the same bug switched off must produce ZERO findings.
+- `decoy-owner-self-access` (TrueNegative): `name1` reading its OWN book (legit
+  200) — the false-positive trap for a scanner that flags any cross-id 200.
+
+**Runner.** New `crates/baloncore-core/src/bench_vampi.rs` scorer +
+`baloncore bench-vampi` CLI command. The command boots both builds
+**sequentially** (they share one sqlite file in the checkout), verifies each
+came up in the requested mode by reading the home endpoint's `"vulnerable"`
+flag (refuses to score if the toggle didn't take effect), seeds the DB
+(`/createdb`), logs in `name1`/`name2` for JWTs, plants a fixed-title book, then
+drives owner/attacker/anonymous `GET`s through the **real** `HttpRequestRunner`
++ `AuthorizationMatrixObservation::classify`. An RAII `ChildGuard` tears each
+build down on every exit path. New core helper
+`HttpRequestRunner::send_with_json_body` carries the login/createdb/plant bodies
+(serialized manually so it works without the optional `reqwest/json` feature);
+it is fixture-setup only and never decides a verdict.
+
+The scorer matches a ground-truth probe to a matrix observation on
+`(mode, endpoint, attacker_profile, object_id)` — `mode` is in the key
+specifically so a vulnerable-build finding can never be credited to the
+secure-build decoy. It reuses `bench_saas::classify_prediction_from_label` and
+`endpoints_equivalent`; it never uses `expected_label` to manufacture a
+prediction, and a probe with no matching observation scores `FalseNegative`
+(never a silent pass).
+
+**Real measured result** (`cargo run -p baloncore -- bench-vampi`, against the
+two live VAmPI builds):
+```
+vuln-bola-books-vulnerable  TruePositive  (BrokenObjectLevelAuthorization,
+                                           attacker 200 + planted secret)
+decoy-bola-books-secure     TrueNegative  (attacker 404, BlockedAsExpected)
+decoy-owner-self-access     TrueNegative  (IntendedOwnerAccess)
+```
+Precision 100%, recall 100%, decoy false-positives 0/2 — honest end-to-end
+numbers against a real external target, with the false-positive rate measured by
+the same target's bug-off build.
+
+**Tests added.**
+- `bench_vampi.rs::tests` (9): happy path, FN when the vulnerable bug is missed,
+  secure-decoy-flagged → FalsePositive, owner-self-flagged → FalsePositive,
+  **`mode_is_part_of_the_match_key`** (a vulnerable observation must NOT satisfy
+  a secure probe), missing-observation-is-FN-not-silent-pass, never-uses-
+  expected-label, and the two CI-gate tests (gate FAILS when the secure decoy is
+  flagged; PASSES on a clean run).
+- `crates/baloncore-core/tests/bench_vampi_lab.rs` — end-to-end integration test
+  that runs the real CLI against the vendored target and asserts TP/TN/TN. Skips
+  with a logged reason (NOT a failure) when the target hasn't been vendored.
+
+**Mutation check.** Removed the `obs.mode == probe.mode` term from the scorer's
+match key → `mode_is_part_of_the_match_key` (and the clean-run gate test) went
+RED: the secure-build decoy then matched the vulnerable-build observation and
+was scored a false positive (`decoy false positives: 1`). Restored from
+`/tmp/bench_vampi.rs.bak` → GREEN (9/9). Full suite: core 533 lib + integration
+green; CLI 25 green.
+
+**V0 verdict change.** P2.S3 (≥5 vendored external targets): PARTIAL →
+**PARTIAL, +1 REAL**. VAmPI is now a real, scored external target (TP + 2 TN,
+0 FP) with a one-command NEEDS-HUMAN fetch. crAPI / DVGA / Damn Vulnerable DeFi
+/ TerraGoat / … remain NEEDS-HUMAN, to be wired one at a time on the same
+template. P2.S6 (CI gate fails on a decoy): independently re-confirmed REAL for
+the VAmPI case via mutation.
+
+---
+
+## P2.S3 (corpus #2) — DVGA external target, real GraphQL-BOLA scan + score
+
+**Target.** `dolevf/Damn-Vulnerable-GraphQL-Application` (DVGA). Second external
+corpus target; exercises the GraphQL BOLA validator. Same template as VAmPI
+(scorer module + `bench-dvga` CLI + `benchmarks/cases/dvga-graphql-bola/`).
+
+**Provenance, checked not assumed.**
+- Repo exists; pinned commit `a961308c02d1fb462b192681c336b0739e432da7`
+  (2025-05-24).
+- **License = MIT** (SPDX), read directly from the repo `LICENSE.md` file (the
+  shortlist's "MIT, verified in README" claim now confirmed against the actual
+  license file).
+- Runtime image pinned by digest:
+  `dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957`.
+  The live image's behaviour was confirmed to match the pinned source.
+
+**Vendoring.** [`scripts/fetch_dvga.sh`](scripts/fetch_dvga.sh) clones the source
+at the pinned commit into the gitignored `.baloncore/corpus/dvga/` (license
+re-verified to still be MIT) and `docker pull`s the digest-pinned image. Docker
+is the one NEEDS-HUMAN dependency (image pull). NOTE: the Docker daemon dropped
+mid-session and recovered after ~30s; the runner treats an unavailable daemon /
+missing image as an explicit NEEDS-HUMAN error, not a fake pass.
+
+**The vuln (real, empirically confirmed against the live image).**
+`core/helpers.py:20-21` (`get_identity`) decodes the auth JWT with
+`verify_signature=False`, and `core/views.py:60-65`
+(`UserObject.resolve_password`) returns a user's REAL password whenever the
+request identity is `"admin"`. So a principal who knows no secret forges an
+unsigned `{"identity":"admin"}` token and reads admin's real password via
+`me(token){ password }`. Confirmed live: forged-admin → `password:"changeme"`;
+forged-operator → `password:"******"`; anonymous → null/error.
+
+**Case files** under
+[`benchmarks/cases/dvga-graphql-bola/`](benchmarks/cases/dvga-graphql-bola/):
+`case.toml`, `scope.toml` (127.0.0.1:5013 only), `ground_truth.json` — one
+planted vuln + **two** decoys, each driven through the real
+`GraphQlBolaValidator`:
+- `vuln-jwt-forge-admin-password` (TruePositive): attacker (operator) forges
+  `identity:admin`, leaks admin's `changeme`. Owner baseline uses a
+  legitimately-issued admin token (via the `login` mutation).
+- `decoy-nonadmin-identity-masked` (TrueNegative): forging a *non-privileged*
+  identity (`operator`) leaks nothing — password is masked to `******`. A
+  scanner that flags any populated `password` field would FP; the validator
+  finds no owner marker and body_similarity ≈0.62 < 0.70 → Rejected.
+- `decoy-public-paste` (TrueNegative): `paste(id:12)` is public, readable by the
+  anonymous probe too → validator Rejects (public data, not cross-user BOLA).
+
+**Runner.** New `crates/baloncore-core/src/bench_dvga.rs` scorer + `baloncore
+bench-dvga` CLI command. The command preflights Docker, boots the digest-pinned
+image (RAII `ContainerGuard` does `docker rm -f` on every exit path), pins
+Beginner difficulty per-request via `X-DVGA-MODE`, obtains a legit owner token
+via the `login` mutation, **forges** unsigned attacker JWTs
+(`dvga_forge_jwt`, base64url, no secret), POSTs each GraphQL probe via
+`HttpRequestRunner::send_with_json_body`, runs the real `GraphQlBolaValidator`,
+and maps Verified→`BrokenObjectLevelAuthorization` / Rejected→`BlockedAsExpected`
+into the matrix. The scorer matches a probe to an observation on
+`(operation, object_id, attacker_profile)` and never uses `expected_label` to
+manufacture a prediction.
+
+**Real measured result** (`cargo run -p baloncore -- bench-dvga`, live image):
+```
+vuln-jwt-forge-admin-password   TruePositive  (Verified; evidence object_id:admin, owner_marker:changeme)
+decoy-nonadmin-identity-masked  TrueNegative  (Rejected; no marker, similarity < 0.70)
+decoy-public-paste              TrueNegative  (Rejected; anonymous also succeeded)
+```
+Precision 100%, recall 100%, decoy false-positives 0/2.
+
+**Tests added.**
+- `bench_dvga.rs::tests` (9): happy path, FN when the bypass is missed, both
+  decoy-flagged→FalsePositive cases, **`match_key_includes_attacker_profile`**
+  (the masked decoy must not be credited with the vuln observation),
+  missing-observation-is-FN, never-uses-expected-label, and the two CI-gate
+  tests (gate FAILS on a decoy hit; PASSES on a clean run).
+- `crates/baloncore-core/tests/bench_dvga_lab.rs` — end-to-end test running the
+  real container via the CLI; asserts TP/TN/TN. Skips with a logged reason
+  (NEEDS-HUMAN) when Docker/the image is unavailable.
+
+**Mutation check.** Removed the `obs.attacker_profile == probe.attacker_profile`
+term from the scorer's match key → `match_key_includes_attacker_profile` (and
+the clean-run gate test) went RED: the masked decoy then matched the vuln's
+`BrokenObjectLevelAuthorization` observation and was scored a false positive
+(`decoy false positives: 1`). Restored from `/tmp/bench_dvga.rs.bak` → GREEN
+(9/9). Full suite: core 542 lib + all integration green; CLI 25 green.
+
+**V0 verdict change.** P2.S3 (≥5 vendored external targets): PARTIAL → **PARTIAL,
++2 REAL** (VAmPI + DVGA). P4.S2 GraphQL active validation: independently
+re-confirmed REAL — the `GraphQlBolaValidator` now fires on a real external
+GraphQL target's authorization bypass and stays silent on two realistic decoys.
+crAPI / TerraGoat / Cfngoat remain queued on the same template.
+
+---
+
+## P2.S3 (corpus #3) — crAPI external target, real multi-service BOLA scan + score
+
+**Target.** `OWASP/crAPI` — a multi-service (Docker Compose) intentionally-
+vulnerable API. Third external corpus target; the flagship real-world BOLA.
+
+**Provenance, checked not assumed.**
+- Repo exists; **License = Apache-2.0** (SPDX), read directly from the repo
+  `LICENSE.md` (the shortlist guessed "expected Apache-2.0"; now confirmed).
+- Pinned to git tag **v1.1.6-rc8** (commit
+  `d1cbf263a310ea4ed342e44a21a3ea32431e8ea6`) so the vendored source matches the
+  published image tag — there are NO `1.1.5`/`1.1.6` images on Docker Hub
+  (`VERSION` in the repo said 1.1.5 but no such image exists; rc8 is the latest
+  concrete tag). Service images pinned to `crapi/*:1.1.6-rc8`. The live stack's
+  seed users + vehicle GUIDs were confirmed to match the pinned source's
+  `TestUsers.java`.
+
+**Vendoring.** [`scripts/fetch_crapi.sh`](scripts/fetch_crapi.sh) clones the
+source at the pinned commit into the gitignored `.baloncore/corpus/crapi/`,
+re-verifies Apache-2.0, pins `VERSION=1.1.6-rc8` in the vendored compose `.env`,
+and `docker compose pull`s the stack. Docker + Compose + a large multi-image
+pull are the NEEDS-HUMAN dependencies.
+
+**The vuln (real, empirically confirmed against the live stack).** crAPI
+Challenge 1 (docs/challenges.md): `VehicleController.getLocationBOLA` —
+`GET /identity/api/v2/vehicle/{carId}/location` returns a vehicle's location by
+GUID with NO ownership check. Seed user Pogba reads owner Adam's vehicle
+location + email by GUID. Confirmed live: attacker HTTP 200 with Adam's
+`32.778889/-91.919243/adam007@example.com`; anonymous HTTP 401.
+
+**Case files** under
+[`benchmarks/cases/crapi-bola-vehicle/`](benchmarks/cases/crapi-bola-vehicle/):
+`case.toml`, `scope.toml` (127.0.0.1:8888 only), `ground_truth.json` — one
+planted vuln + **two** decoys, each driven through the real `BolaValidator`:
+- `vuln-bola-vehicle-location` (TruePositive): Pogba reads Adam's vehicle
+  location by GUID. Owner baseline uses Adam's legitimately-issued login token.
+- `decoy-user-video-owner-scoped` (TrueNegative): `GET /identity/api/v2/user/videos/{id}`
+  resolves the video from the CALLER's own user id, so a non-owner gets HTTP 404.
+  Looks cross-user-reachable (numeric id) but ownership IS enforced — the
+  "correctly-blocked" decoy. Confirmed live: owner 200, attacker 404.
+- `decoy-public-jwks` (TrueNegative): `GET /identity/api/auth/jwks.json` is
+  intentionally public — the anonymous caller also succeeds, so the validator
+  Rejects (public data, not cross-user BOLA — the DVGA public-paste pattern).
+  Confirmed live: anonymous HTTP 200.
+
+**Runner.** New `crates/baloncore-core/src/bench_crapi.rs` scorer + `baloncore
+bench-crapi` CLI command. The command preflights Docker + Compose, brings the
+stack up (`docker compose up -d`), then **waits for real stack readiness** by
+polling the owner login until it returns a token (proves identity + seeded DB
+are up, not merely that `compose up` returned) — a stack that never becomes
+ready is an explicit error, never a fake pass. It logs in seed users, drives
+owner/attacker/anonymous `GET`s through the real `BolaValidator`, and maps
+Verified→`BrokenObjectLevelAuthorization` / Rejected→`BlockedAsExpected`. An
+RAII `ComposeGuard` runs `docker compose down -v --remove-orphans` on EVERY exit
+path (success, error, panic) — verified zero leftover containers after the run.
+The scorer matches a probe to an observation on
+`(endpoint, attacker_profile, object_id)` and never uses `expected_label`.
+
+**Real measured result** (`cargo run -p baloncore -- bench-crapi`, live stack):
+```
+vuln-bola-vehicle-location      TruePositive  (Verified; evidence GUID + 32.778889 + adam007@example.com; anon 401)
+decoy-user-video-owner-scoped   TrueNegative  (Rejected; attacker HTTP 404, ownership enforced)
+decoy-public-jwks               TrueNegative  (Rejected; anonymous also succeeded → public)
+```
+Precision 100%, recall 100%, decoy false-positives 0/2.
+
+**Tests added.**
+- `bench_crapi.rs::tests` (9): happy path, FN when the BOLA is missed, both
+  decoy-flagged→FalsePositive cases, **`match_key_includes_endpoint_and_object`**,
+  missing-observation-is-FN, never-uses-expected-label, and the two CI-gate
+  tests (gate FAILS on a decoy hit; PASSES on a clean run).
+- `crates/baloncore-core/tests/bench_crapi_lab.rs` — end-to-end test bringing the
+  real compose stack up via the CLI; asserts TP/TN/TN. Skips with a logged
+  reason (NEEDS-HUMAN) when Docker/the stack is unavailable.
+
+**Mutation check.** Collapsed the scorer's match key to `attacker_profile` only
+(dropping the `endpoint` + `object_id` disambiguators) → `happy_path`,
+`match_key_includes_endpoint_and_object`, and the clean-run gate test went RED:
+both decoys then matched the vuln's `BrokenObjectLevelAuthorization` observation
+and were scored false positives (`decoy false positives: 2`, precision 33.3%).
+Restored from `/tmp/bench_crapi.rs.bak` → GREEN (9/9). Full suite: core 551 lib
+green + crAPI integration green; CLI 25 green.
+
+**V0 verdict change.** P2.S3 (≥5 vendored external targets): PARTIAL → **PARTIAL,
++3 REAL** (VAmPI + DVGA + crAPI). The runner now also proves the multi-service
+discipline the directive required: full-stack readiness wait (no half-started
+fake pass) and whole-stack teardown on every exit path. TerraGoat / Cfngoat
+(static IaC, offline) remain queued on the same template.
+
+---
+
+## P2.S3 (corpus #4) — TerraGoat external target, real OFFLINE static-IaC scan + score
+
+**Target.** `bridgecrewio/TerraGoat` — a static Terraform (HCL) corpus of
+intentionally-misconfigured cloud resources. Fourth external corpus target, and
+a DIFFERENT shape from the first three: no server, no Docker, no daemon, no
+network at analysis time — pure `.tf` file parsing analyzed offline by
+`analyze-cloud-iam`.
+
+**Provenance, checked not assumed.**
+- Repo exists; **License = Apache-2.0** (SPDX), read directly from the repo
+  `LICENSE` file (the shortlist guessed "Apache-2.0, confirm"; now confirmed).
+- Pinned commit `729f8da62c6a85ce4af5ad3d123de97776d954c4` (2023-04-27).
+
+**Vendoring.** [`scripts/fetch_terragoat.sh`](scripts/fetch_terragoat.sh) git-
+clones the pinned commit into the gitignored `.baloncore/corpus/terragoat/` and
+re-verifies Apache-2.0. No Docker, no image pull — the NEEDS-HUMAN step is just
+the git clone.
+
+**New capability (the "cloud equivalent of the runner").** BALONCORE had no HCL
+parser — the existing Terraform path ingests tfstate/plan JSON, and there is no
+`terraform` binary on this host. So I built
+`crates/baloncore-core/src/cloud_providers/terraform_hcl.rs`: an offline HCL
+`.tf` → `IAMGraph` ingestor (via the `hcl` crate). It translates IaC facts into
+graph nodes — `aws_iam_user`/`aws_iam_role` → principals; inline
+`aws_iam_user_policy`/`aws_iam_role_policy` → policies parsed from the embedded
+JSON and **linked to their principal** (the existing tfstate ingestor did NOT
+link inline policies, so over-privileged findings never fired); `aws_security_group`
+→ resource marked public iff an `ingress` rule allows `0.0.0.0/0`; `aws_s3_bucket`
+→ marked public iff a public-read ACL. DETECTION stays in the real, unchanged
+`IAMGraph::analyze()` (public exposure + over-privileged checks).
+
+**Case files** under
+[`benchmarks/cases/terragoat-iam/`](benchmarks/cases/terragoat-iam/):
+`case.toml`, `scope.toml` (documents offline / no-network), `ground_truth.json`,
+and `negative_controls.tf` (BALONCORE-authored correctly-configured decoys).
+2 planted vulns (real TerraGoat resources) + **3** decoys:
+- `vuln-open-security-group-web-node` (TruePositive): TerraGoat ec2.tf
+  `aws_security_group.web-node` opens ports 22/80/all to `0.0.0.0/0`
+  (Checkov CKV_AWS_24) → `PublicResourceExposure`.
+- `vuln-overprivileged-user-policy` (TruePositive): TerraGoat iam.tf
+  `aws_iam_user_policy.userpolicy` grants `ec2:*/s3:*/lambda:*/cloudwatch:*` on
+  `Resource:*` → `OverPrivilegedPolicy`.
+- `decoy-encrypted-private-logs-bucket` (TrueNegative): TerraGoat's `logs`
+  bucket (private ACL + KMS encryption) — a real, correctly-configured resource.
+- `decoy-least-privilege-policy` (TrueNegative): negative control — a scoped
+  `s3:GetObject` policy on one ARN. **The credibility-critical cloud FP**:
+  flagging a least-privilege policy as over-privileged.
+- `decoy-internal-security-group` (TrueNegative): negative control — an SG whose
+  only ingress is `10.0.0.0/8` (the open-SG vuln with the misconfig removed).
+
+**Cloud scoring semantics (distinct from the HTTP scorers).** A static analysis
+examines every resource, so "no finding for a resource" is a deliberate clean
+verdict (`TrueNegative` for a decoy), NOT a "scan miss" `FalseNegative`. The
+scorer (`bench_terragoat.rs`) encodes that confusion matrix and matches a finding
+to a probe by `affected_resource`. It also surfaces `unmatched_findings`
+(analyzer flags outside the curated ground truth) in run metadata so nothing is
+silently hidden — observed count: 0.
+
+**Real measured result** (`cargo run -p baloncore -- bench-terragoat`, offline):
+```
+vuln-open-security-group-web-node    TruePositive  (PublicResourceExposure)
+vuln-overprivileged-user-policy      TruePositive  (OverPrivilegedPolicy)
+decoy-encrypted-private-logs-bucket  TrueNegative  (not flagged)
+decoy-least-privilege-policy         TrueNegative  (not flagged)
+decoy-internal-security-group        TrueNegative  (not flagged)
+```
+Precision 100%, recall 100%, decoy false-positives 0/3, 0 stray findings.
+
+**Tests added.**
+- `cloud_providers::terraform_hcl::tests` (5): open-SG→public, private-SG→not,
+  wildcard-inline-policy is linked + over-privileged, scoped-policy is NOT
+  over-privileged, and an end-to-end `analyze()` that flags the two vulns and
+  spares the two negative controls.
+- `bench_terragoat.rs::tests` (9): happy path, FN when a vuln is missed, both
+  decoy-flagged→FalsePositive cases, **`not_flagged_decoy_is_true_negative_not_false_negative`**
+  (pins the cloud semantics), never-uses-expected-label, unmatched-findings
+  surfaced, and the two CI-gate tests.
+- `crates/baloncore-core/tests/bench_terragoat_lab.rs` — end-to-end offline test
+  via the CLI; asserts 2×TP + 3×TN. Skips (NEEDS-HUMAN) when the corpus is not
+  vendored.
+
+**Mutation check.** Changed the cloud confusion-matrix rule
+`(TrueNegative, flagged) => FalsePositive` to `=> TrueNegative` (i.e. flagging a
+correctly-configured decoy no longer counts against precision) → both
+decoy-FP tests and `ci_gate_fails_when_a_decoy_is_flagged` went RED. Restored
+from `/tmp/bench_terragoat.rs.bak` → GREEN (9/9 scorer + 5/5 ingestor). Full
+suite: core 565 lib + TerraGoat integration green; CLI 25 green.
+
+**V0 verdict change.** P2.S3 (≥5 vendored external targets): PARTIAL → **PARTIAL,
++4 REAL** (VAmPI + DVGA + crAPI + TerraGoat). P2 cloud_iam vertical: the cloud
+analyzer is now exercised end-to-end against a real external IaC corpus, offline,
+with the decoy-FP rate (including a least-privilege negative control) measured at
+0. New dependency: `hcl` (hcl-rs 0.19) added to baloncore-core for offline HCL
+parsing. Cfngoat (static CloudFormation, offline) remains queued.
+
+---
+
+## P2.S3 (corpus #5) — Cfngoat external target, real OFFLINE CloudFormation scan + score
+
+**Target.** `bridgecrewio/Cfngoat` — a static CloudFormation (YAML) corpus of
+intentionally-misconfigured cloud resources. Fifth external corpus target; same
+offline shape as TerraGoat but CloudFormation, not HCL.
+
+**Provenance, checked not assumed — and a license finding.**
+- Repo exists; pinned commit `0c09b69cfc3dbc6cb3ef01883415c35c588ced48`
+  (2022-01-12).
+- **License = NONE.** The Cfngoat repo has NO `LICENSE` file and the GitHub API
+  reports `license: null`. The shortlist guessed "Apache-2.0, confirm" — that is
+  WRONG. It is all-rights-reserved by default. Consequence:
+  [`scripts/fetch_cfngoat.sh`](scripts/fetch_cfngoat.sh) is **fetch-only** — it
+  clones into the gitignored `.baloncore/corpus/` at build time and the
+  templates are NEVER committed to this repo (no redistribution). `case.toml`
+  records `license = "NOASSERTION"` with the rationale, and the fetch script
+  re-checks on each run that no license has appeared upstream. The only committed
+  CloudFormation is our own negative-control template.
+
+**Capability gaps closed (the "build it, don't fake around it" work).** The
+shipped `cloud_providers::cloudformation` ingestor could NOT analyze real CFN
+templates — three real gaps, all fixed (with regression tests):
+1. **CFN short-form intrinsics.** `serde_yaml` errored ("invalid type: enum") on
+   `!Ref`/`!Sub`/`!GetAtt`. Added `cfn_yaml_to_json`, which parses to
+   `serde_yaml::Value` and collapses tagged nodes to canonical JSON
+   (`!Ref X` → `{"Ref":"X"}`, etc.); literals (CidrIp, Action, Resource) pass
+   through unchanged.
+2. **Policy→principal linkage via `Users`/`Groups`.** `ingest_policy` linked only
+   via `Roles`. Cfngoat's wildcard `excess_policy` attaches via `Users: [!Ref User]`,
+   so the over-privileged finding never fired. Extended linkage to Roles + Users
+   + Groups (name or `{Ref}` form).
+3. **No security-group handler.** Added `ingest_security_group`, marking the SG
+   public when an `ingress` rule allows `0.0.0.0/0` (or `::/0`).
+Also added `ingest_files` to merge several templates (target + negative
+controls) into one graph. Detection stays in the unchanged `IAMGraph::analyze()`.
+
+**Case files** under
+[`benchmarks/cases/cfngoat-iam/`](benchmarks/cases/cfngoat-iam/): `case.toml`
+(license=NOASSERTION), `scope.toml` (offline / no-network), `ground_truth.json`,
+and `negative_controls.yaml` (BALONCORE-authored decoys). 4 planted vulns (real
+Cfngoat resources) + 2 decoys:
+- `vuln-open-security-group-webnode` (TruePositive): `WebNodeSG` opens 0.0.0.0/0
+  (CKV_AWS_24) → PublicResourceExposure.
+- `vuln-overprivileged-user-policy` (TruePositive): `excess_policy`
+  (ec2:*/s3:*/… on Resource:*, attached via Users) → OverPrivilegedPolicy.
+- `vuln-overprivileged-lambda-execute` + `vuln-overprivileged-s3-object-delete`
+  (TruePositive): the two inline policies on `CleanupRole` (logs:* / Resource:*)
+  → OverPrivilegedPolicy.
+- `decoy-least-privilege-policy` (TrueNegative): scoped s3:GetObject on one ARN —
+  the credibility-critical over-privileged FP guard.
+- `decoy-internal-security-group` (TrueNegative): SG ingress restricted to
+  10.0.0.0/8.
+
+**Real measured result** (`cargo run -p baloncore -- bench-cfngoat`, offline):
+```
+vuln-open-security-group-webnode      TruePositive  (PublicResourceExposure)
+vuln-overprivileged-user-policy       TruePositive  (OverPrivilegedPolicy)
+vuln-overprivileged-lambda-execute    TruePositive  (OverPrivilegedPolicy)
+vuln-overprivileged-s3-object-delete  TruePositive  (OverPrivilegedPolicy)
+decoy-least-privilege-policy          TrueNegative  (not flagged)
+decoy-internal-security-group         TrueNegative  (not flagged)
+```
+Precision 100%, recall 100%, decoy false-positives 0/2, 0 stray findings.
+
+**Tests added.**
+- `cloud_providers::cloudformation::tests` (+3): intrinsics parse + open SG
+  flagged; `Users`-attached wildcard policy linked + flagged; scoped policy +
+  internal SG produce NO findings.
+- `bench_cfngoat.rs::tests` (9): happy path (4 TP + 2 TN), FN when a vuln is
+  missed, both decoy-flagged→FalsePositive, not-flagged-decoy-is-TN, never-uses-
+  expected-label, unmatched-findings surfaced, and the two CI-gate tests.
+- `crates/baloncore-core/tests/bench_cfngoat_lab.rs` — end-to-end offline test
+  via the CLI; asserts 4×TP + 2×TN. Skips (NEEDS-HUMAN) when the corpus is not
+  vendored.
+
+**Mutation check.** Changed the cloud rule `(TrueNegative, flagged) =>
+FalsePositive` to `=> TrueNegative` → both decoy-FP tests and
+`ci_gate_fails_when_a_decoy_is_flagged` went RED. Restored from
+`/tmp/bench_cfngoat.rs.bak` → GREEN (9/9 scorer + 7/7 ingestor). (The capability
+fixes are independently guarded by the three new ingestor tests.) Full suite:
+core 577 lib + Cfngoat integration green; CLI 25 green.
+
+**V0 verdict change.** P2.S3 (≥5 vendored external targets): PARTIAL → **MET — 5
+REAL** (VAmPI + DVGA + crAPI + TerraGoat + Cfngoat), spanning REST BOLA, GraphQL
+auth bypass, multi-service BOLA, and offline IaC (Terraform HCL + CloudFormation).
+The CloudFormation analyzer now actually parses real templates (intrinsics +
+Users/Groups linkage + SG detection) — a real product capability gain, not just a
+benchmark. Cfngoat's missing license is handled honestly: fetch-only, never
+redistributed, recorded as NOASSERTION.
 

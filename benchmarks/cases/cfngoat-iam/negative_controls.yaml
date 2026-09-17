@@ -1,0 +1,47 @@
+# BALONCORE negative controls for the Cfngoat cloud benchmark.
+#
+# These are NOT part of Cfngoat. They are correctly-configured CloudFormation
+# resources that bench-cfngoat feeds to analyze-cloud-iam ALONGSIDE the vendored
+# Cfngoat template. They are the cloud false-positive guard: a credible analyzer
+# must NOT flag any of these. If analyze-cloud-iam reports a finding on one of
+# these, the bench scores it as a decoy false positive.
+#
+# (Uses !Ref deliberately so the scoped policy is linked to its user and is
+# actually evaluated by the over-privileged check — and correctly NOT flagged.)
+AWSTemplateFormatVersion: '2010-09-09'
+Description: BALONCORE negative controls (correctly-configured resources)
+Resources:
+  BaloncoreDecoyUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: baloncore-decoy-user
+
+  # Least-privilege inline policy: one scoped action on one specific resource,
+  # no wildcard action and no wildcard resource. Over-privileged check must NOT
+  # fire — the credibility-critical cloud false positive.
+  BaloncoreScopedPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: baloncore-scoped-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: "arn:aws:s3:::baloncore-decoy-bucket/reports/*"
+      Users:
+        - !Ref BaloncoreDecoyUser
+
+  # Security group restricted to an internal CIDR — no 0.0.0.0/0. The
+  # public-exposure check must NOT fire.
+  BaloncoreInternalSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: baloncore-internal-sg
+      GroupDescription: internal-only access
+      SecurityGroupIngress:
+        - CidrIp: 10.0.0.0/8
+          FromPort: 443
+          ToPort: 443
+          IpProtocol: tcp

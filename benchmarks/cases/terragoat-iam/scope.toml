@@ -1,0 +1,11 @@
+# BALONCORE scope contract for the offline TerraGoat IaC analysis.
+#
+# This target is analyzed entirely offline (static .tf file parsing). There is
+# no network target and no host to authorize — these fields document that.
+[scope]
+allow_urls = []
+allow_hosts = []
+deny_hosts = ["*"]
+max_depth = 0
+authorized = true
+notes = "Offline static IaC analysis of locally-vendored bridgecrewio/TerraGoat (Apache-2.0). No network, no deployed cloud resources — analyze-cloud-iam only parses .tf files. Never deploy these resources."

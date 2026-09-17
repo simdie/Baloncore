@@ -1,0 +1,32 @@
+# P2.S3 external corpus — bridgecrewio/Cfngoat static-IaC (CloudFormation) bench case
+#
+# Like TerraGoat, Cfngoat is analyzed OFFLINE — no server, no Docker, no network
+# at analysis time. bench-cfngoat parses the vendored CloudFormation `.yaml`
+# templates into an IAM graph (cloud_providers::cloudformation, extended to parse
+# CFN short-form intrinsics, link Users/Groups-attached policies, and detect open
+# security groups) and runs analyze-cloud-iam (public exposure + over-privileged
+# IAM), then scores findings against the hand-labelled ground truth.
+
+id = "cfngoat-iam"
+name = "Cfngoat: open security group + over-privileged IAM (offline CloudFormation)"
+kind = "cloud_iam"
+
+# --- provenance (verified May 2026; opened the LICENSE — there is NONE) ---
+source = "https://github.com/bridgecrewio/cfngoat"
+source_commit = "0c09b69cfc3dbc6cb3ef01883415c35c588ced48"   # 2022-01-12
+# IMPORTANT: the Cfngoat repo has NO LICENSE file and the GitHub API reports
+# `license: null`. It is NOT Apache-2.0 (the shortlist's guess was wrong). It is
+# all-rights-reserved by default, so we do NOT redistribute it: scripts/
+# fetch_cfngoat.sh downloads it into the gitignored .baloncore/corpus/ at build
+# time and the templates are never committed to this repo.
+license = "NOASSERTION"
+license_note = "No LICENSE file in the upstream repo (GitHub API license=null). Fetch-only via scripts/fetch_cfngoat.sh; templates never committed."
+authorized = true
+
+# --- how the target is obtained and analyzed ---
+fetch_script = "scripts/fetch_cfngoat.sh"
+cfngoat_dir = ".baloncore/corpus/cfngoat/cfngoat"
+analyzed_template = "cfngoat.yaml"
+negative_controls = "benchmarks/cases/cfngoat-iam/negative_controls.yaml"
+provider = "cloudformation"
+run_method = "offline CloudFormation parse -> IAMGraph::analyze() (no terraform/aws binary, no cloud account)"

@@ -1,0 +1,39 @@
+{
+  "case_id": "jwt-vampi",
+  "description": "A1 JWT-auth-finder ground truth for erev0s/VAmPI. VAmPI signs HS256 with the weak secret 'random' and verifies signatures on decode. So a weak-secret-brute forgery (sub=admin signed with 'random') is accepted and escalates identity; an alg=none forgery is correctly REJECTED (a held-out decoy); and a public endpoint is reachable anonymously (another decoy). Scenarios are scored by whether the JwtAuthFinder returns Verified.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/erev0s/VAmPI",
+  "source_commit": "f16052dce83f05847133ec98f01c5193a41de7d8",
+  "license": "MIT",
+  "vulnerabilities": [
+    {
+      "id": "vuln-weak-secret-hmac-admin",
+      "endpoint": "GET /me",
+      "technique": "WeakSecretHmac",
+      "escalate_to": "admin",
+      "expected_label": "TruePositive",
+      "rationale": "config.py sets SECRET_KEY='random'. The finder brute-forces a small wordlist, signs an HS256 token with sub='admin' using 'random', and GET /me returns the admin record (admin@mail.com, admin:true). The control identity (name2) sees only mail2@mail.com and the anonymous caller gets 401 — so the forged token reached data neither could.",
+      "victim_markers": ["admin@mail.com"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-algnone-rejected",
+      "endpoint": "GET /me",
+      "technique": "AlgNone",
+      "escalate_to": "admin",
+      "expected_label": "TrueNegative",
+      "rationale": "VAmPI's decode_auth_token verifies the HS256 signature with SECRET_KEY. An alg=none / unsigned token claiming sub='admin' is REJECTED (401, 'Invalid token'), so the forged token never reaches admin data. A correctly-rejecting endpoint the finder must NOT flag.",
+      "victim_markers": ["admin@mail.com"]
+    },
+    {
+      "id": "decoy-public-users",
+      "endpoint": "GET /users/v1",
+      "technique": "AlgNone",
+      "escalate_to": "admin",
+      "expected_label": "TrueNegative",
+      "rationale": "/users/v1 (get_all_users) is unauthenticated and lists every user incl. admin@mail.com. The forged token 'works' but the anonymous caller ALSO receives admin@mail.com, so it is not an auth bypass — the finder must NOT flag it.",
+      "victim_markers": ["admin@mail.com"]
+    }
+  ]
+}

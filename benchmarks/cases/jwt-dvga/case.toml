@@ -1,0 +1,11 @@
+# A1 — JWT auth-bypass finder bench case against dolevf/DVGA (reuses the
+# vendored DVGA image from scripts/fetch_dvga.sh). bench-jwt-dvga boots the
+# image, runs the JwtAuthFinder, scores, and tears the container down.
+id = "jwt-dvga"
+name = "JWT auth bypass (signature-not-verified) on DVGA"
+kind = "web_api"
+source = "https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application"
+source_commit = "a961308c02d1fb462b192681c336b0739e432da7"
+license = "MIT"
+image = "dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957"
+authorized = true

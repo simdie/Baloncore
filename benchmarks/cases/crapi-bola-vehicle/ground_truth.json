@@ -1,0 +1,49 @@
+{
+  "case_id": "crapi-bola-vehicle",
+  "description": "Hand-labelled ground truth for the OWASP crAPI external target. Each probe is driven through the real BolaValidator by bench-crapi (owner / attacker / anonymous exchanges against a live compose stack). A probe matches a runner observation on (endpoint, attacker_profile, object_id). expected_label is what the validator MUST conclude. Authored from crAPI's own documented challenge list (docs/challenges.md) plus two realistic decoys.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/OWASP/crAPI",
+  "source_commit": "d1cbf263a310ea4ed342e44a21a3ea32431e8ea6",
+  "image_version": "1.1.6-rc8",
+  "license": "Apache-2.0",
+  "vulnerabilities": [
+    {
+      "id": "vuln-bola-vehicle-location",
+      "class": "BrokenObjectLevelAuthorization",
+      "endpoint": "GET /identity/api/v2/vehicle/{object_id}/location",
+      "object_id": "f89b5f21-7829-45cb-a650-299a61090378",
+      "owner_profile": "adam007@example.com",
+      "attacker_profile": "pogba006@example.com",
+      "owner_markers": ["32.778889", "-91.919243", "adam007@example.com"],
+      "expected_label": "TruePositive",
+      "rationale": "crAPI Challenge 1 (docs/challenges.md). VehicleController.getLocationBOLA (services/identity/.../VehicleController.java) returns a vehicle's location by GUID with NO ownership check. A different authenticated user (Pogba) reads owner Adam's vehicle location + email. Confirmed live: attacker HTTP 200 with Adam's 32.778889/-91.919243/adam007@example.com; anonymous HTTP 401.",
+      "expected_evidence_substrings": ["32.778889", "adam007@example.com"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-user-video-owner-scoped",
+      "class": "BlockedAsExpected",
+      "endpoint": "GET /identity/api/v2/user/videos/{object_id}",
+      "object_id": "1",
+      "owner_profile": "adam007@example.com",
+      "attacker_profile": "pogba006@example.com",
+      "owner_markers": ["Adam_video"],
+      "expected_label": "TrueNegative",
+      "rationale": "ProfileServiceImpl.getProfileVideo resolves the video from the CALLER's own user id and only returns it when the id matches, so a non-owner gets HTTP 404 'Video not found'. This endpoint looks cross-user-reachable (a numeric video id in the path) but ownership IS enforced. Confirmed live: owner Adam HTTP 200 (Adam_video), attacker Pogba HTTP 404. A naive cross-id scanner would flag the path; the validator correctly Rejects (attacker blocked).",
+      "expected_evidence_substrings": []
+    },
+    {
+      "id": "decoy-public-jwks",
+      "class": "BlockedAsExpected",
+      "endpoint": "GET /identity/api/auth/jwks.json",
+      "object_id": "jwks",
+      "owner_profile": "adam007@example.com",
+      "attacker_profile": "pogba006@example.com",
+      "owner_markers": ["RSA"],
+      "expected_label": "TrueNegative",
+      "rationale": "The JWKS endpoint is intentionally public infrastructure data (clients need it to verify tokens) — the anonymous caller also receives the identical body. The validator observes anonymous success with a near-identical body and Rejects (public data is not a cross-user BOLA — the DVGA public-paste pattern). Confirmed live: anonymous HTTP 200 with the RSA key set.",
+      "expected_evidence_substrings": []
+    }
+  ]
+}

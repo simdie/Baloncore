@@ -189,12 +189,28 @@ fn classify_prediction(
     matched: Option<&MatrixObservation>,
     expected: GroundTruthLabel,
 ) -> GroundTruthLabel {
-    let matched = match matched {
-        Some(m) => m,
+    classify_prediction_from_label(matched.map(|m| m.classification.as_str()), expected)
+}
+
+/// The core scoring rule, decoupled from any target-specific observation
+/// struct: given the classification label the deterministic classifier
+/// produced for a probe (or `None` if the scan produced no verdict at all) and
+/// the hand-labelled ground-truth expectation, decide the per-case prediction.
+///
+/// The ground-truth label is what we are checking the system AGAINST; it is
+/// NEVER used to manufacture a prediction. A missing observation is a
+/// `FalseNegative` (we wanted a verdict and didn't get one), never a silent
+/// pass. Shared by the SaaS and VAmPI scorers.
+pub(crate) fn classify_prediction_from_label(
+    matched_classification: Option<&str>,
+    expected: GroundTruthLabel,
+) -> GroundTruthLabel {
+    let classification = match matched_classification {
+        Some(c) => c,
         None => return GroundTruthLabel::FalseNegative,
     };
     let is_finding = matches!(
-        matched.classification.as_str(),
+        classification,
         "BrokenObjectLevelAuthorization"
             | "BrokenFunctionLevelAuthorization"
             | "MissingAuthentication"
@@ -213,13 +229,14 @@ fn classify_prediction(
     }
 }
 
-fn endpoints_equivalent(a: &str, b: &str) -> bool {
+pub(crate) fn endpoints_equivalent(a: &str, b: &str) -> bool {
     let normalize = |s: &str| {
         s.trim()
             .trim_start_matches("GET ")
             .trim_start_matches("get ")
             .replace("{orgId}", "{}")
             .replace("{projectId}", "{}")
+            .replace("{book}", "{}")
             .replace("{id}", "{}")
             .to_ascii_lowercase()
     };

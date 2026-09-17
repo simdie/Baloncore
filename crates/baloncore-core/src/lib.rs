@@ -1,8 +1,14 @@
+pub mod active_finder;
 pub mod agent;
 pub mod agent_runtime;
 pub mod agents;
 pub mod attack_graph;
+pub mod bench_cfngoat;
+pub mod bench_crapi;
+pub mod bench_dvga;
 pub mod bench_saas;
+pub mod bench_terragoat;
+pub mod bench_vampi;
 pub mod business_logic;
 pub mod ci;
 pub mod ci_analytics;
@@ -21,6 +27,7 @@ pub mod evidence;
 pub mod finding;
 pub mod flagship_report;
 pub mod github;
+pub mod jwt_auth_finder;
 pub mod lifecycle;
 pub mod matcher;
 pub mod metrics;
@@ -39,6 +46,11 @@ pub mod web3;
 pub mod web3_parsers;
 pub mod web_api;
 
+pub use active_finder::{
+    differential, ActiveFinder, ActiveProof, AuthProfileRef, DifferentialConfig,
+    DifferentialOutcome, FinderContext, FinderDecision, FinderError, OobCollaborator,
+    OobInteraction, ProbeBudget, ProbeObservation, ProofKind,
+};
 pub use agent::{
     agent_spec, bridge_hypotheses_to_validators, challenge_hypotheses, prompt_template,
     run_fixture_agent, run_fixture_agent_pipeline, validate_agent_output,
@@ -50,9 +62,20 @@ pub use agent_runtime::{
     build_repair_request, contains_unredacted_secrets, parse_agent_output, redact_for_model,
     run_live_agent, run_live_agent_pipeline, AgentParseError, ModelBudget, ModelBudgetReport,
 };
+pub use bench_cfngoat::{
+    cfngoat_iam_suite, score_cfngoat_findings, CfngoatGroundTruth, CfngoatProbe,
+};
+pub use bench_crapi::{crapi_bola_suite, score_crapi_matrix_summary, CrapiGroundTruth, CrapiProbe};
+pub use bench_dvga::{
+    dvga_graphql_bola_suite, score_dvga_matrix_summary, DvgaGroundTruth, DvgaProbe,
+};
 pub use bench_saas::{
     saas_cross_tenant_suite, score_saas_matrix_summary, SaasGroundTruth, SaasProbe,
 };
+pub use bench_terragoat::{
+    score_terragoat_findings, terragoat_iam_suite, TerragoatGroundTruth, TerragoatProbe,
+};
+pub use bench_vampi::{score_vampi_matrix_summary, vampi_bola_suite, VampiGroundTruth, VampiProbe};
 pub use business_logic::{
     BusinessLogicAbuse, BusinessLogicDecision, BusinessLogicValidationCase, BusinessLogicValidator,
     RejectedBusinessLogicHypothesis, VerifiedBusinessLogicFinding, WorkflowExchange,
@@ -146,6 +169,11 @@ pub use github::{
     EndpointChange, GitHubClient, GitHubPR, GitHubPRComment, GitHubPRFile, GitHubReview,
     GitHubWebhookEvent, GitHubWebhookResponse, PRComparison, PRDiffAnalysis, RevalidationPlan,
     RevalidationTarget, SecurityRelevantFile,
+};
+pub use jwt_auth_finder::{
+    forge_alg_none, forge_claim_tamper, forge_hs256, forge_stripped_signature,
+    forged_access_proven, jwt_prediction, jwt_suite, score_jwt_run, ForgeTechnique, JwtAuthCase,
+    JwtAuthFinder, JwtGroundTruth, JwtScenario, TokenInjection,
 };
 pub use lifecycle::{FindingRecord, FindingState, FindingStore, FindingTransition, ScanRecord};
 pub use metrics::{

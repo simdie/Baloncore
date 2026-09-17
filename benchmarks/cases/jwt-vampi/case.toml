@@ -1,0 +1,11 @@
+# A1 — JWT auth-bypass finder bench case against erev0s/VAmPI (reuses the
+# vendored VAmPI venv from scripts/fetch_vampi.sh). bench-jwt-vampi boots the
+# vulnerable instance, runs the JwtAuthFinder, scores, and tears it down.
+id = "jwt-vampi"
+name = "JWT auth bypass (weak HMAC secret) on VAmPI"
+kind = "web_api"
+source = "https://github.com/erev0s/VAmPI"
+source_commit = "f16052dce83f05847133ec98f01c5193a41de7d8"
+license = "MIT"
+vampi_dir = ".baloncore/corpus/vampi/VAmPI"
+authorized = true

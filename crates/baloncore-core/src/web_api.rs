@@ -1783,6 +1783,23 @@ impl HttpRequestRunner {
     }
 
     pub fn send(&self, spec: &HttpRequestSpec) -> Result<HttpExchange, HttpRunnerError> {
+        self.send_with_json_body(spec, None)
+    }
+
+    /// Like [`send`](Self::send) but attaches an optional JSON request body
+    /// (with `Content-Type: application/json`).
+    ///
+    /// This exists for benchmark *fixture setup* — logging in to obtain a
+    /// token, seeding a database, creating a resource to later probe — where a
+    /// request body is required. The security-probe path that feeds the
+    /// validators stays on [`send`](Self::send) (bodyless GETs); this helper
+    /// never decides a verdict, it only prepares the world the probes run
+    /// against.
+    pub fn send_with_json_body(
+        &self,
+        spec: &HttpRequestSpec,
+        json_body: Option<&serde_json::Value>,
+    ) -> Result<HttpExchange, HttpRunnerError> {
         let mut request = match spec.method {
             HttpMethod::Get => self.client.get(&spec.url),
             HttpMethod::Post => self.client.post(&spec.url),
@@ -1816,6 +1833,16 @@ impl HttpRequestRunner {
 
         if let (Some(header_name), Some(token)) = (&spec.csrf_token_header, &spec.csrf_token) {
             request = request.header(header_name.as_str(), token.as_str());
+        }
+
+        if let Some(body) = json_body {
+            // Serialize ourselves + set the header rather than `.json()` so this
+            // works without the `reqwest/json` feature (only enabled under the
+            // optional `live-models` feature).
+            let serialized = serde_json::to_vec(body).unwrap_or_default();
+            request = request
+                .header("Content-Type", "application/json")
+                .body(serialized);
         }
 
         let response = request.send()?;

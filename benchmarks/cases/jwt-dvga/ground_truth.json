@@ -1,0 +1,30 @@
+{
+  "case_id": "jwt-dvga",
+  "description": "A1 JWT-auth-finder ground truth for dolevf/DVGA. The JwtAuthFinder forges tokens and proves cross-identity access (ForgedTokenAccess) against the live target. DVGA decodes JWTs with signature verification DISABLED, so a forged {identity:admin} token leaks the admin password via me(token){password}. Scenarios are scored by whether the finder returns Verified.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application",
+  "source_commit": "a961308c02d1fb462b192681c336b0739e432da7",
+  "license": "MIT",
+  "vulnerabilities": [
+    {
+      "id": "vuln-forge-admin-identity",
+      "endpoint": "POST /graphql me(token)",
+      "technique": "AlgNone|StripSignature|ClaimTamper",
+      "escalate_to": "admin",
+      "expected_label": "TruePositive",
+      "rationale": "core/helpers.py get_identity decodes the token with verify_signature=False; resolve_password returns the real password when identity==admin. A forged {identity:admin} token (alg=none / stripped sig / tampered claims) read by me(token){password} returns admin's real password 'changeme', which the operator control identity (masked '******') and the anonymous caller (error) do NOT receive.",
+      "victim_markers": ["changeme"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-public-paste",
+      "endpoint": "POST /graphql paste(id:12)",
+      "technique": "AlgNone",
+      "escalate_to": "admin",
+      "expected_label": "TrueNegative",
+      "rationale": "paste(id:12) is public:true — the content is returned to the forged token, the control token, AND the anonymous caller alike. A forged request 'working' here proves nothing (anonymous already sees the marker), so the finder must NOT flag it.",
+      "victim_markers": ["Mind your own business"]
+    }
+  ]
+}

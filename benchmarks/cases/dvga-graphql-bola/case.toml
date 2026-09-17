@@ -1,0 +1,49 @@
+# P2.S3 external corpus — DVGA GraphQL authorization-bypass bench case
+#
+# DVGA (Damn Vulnerable GraphQL Application) ships a JWT identity bypass: the
+# auth token is decoded with signature verification DISABLED, and a user's real
+# password is returned by the GraphQL API whenever the request identity is
+# "admin". The `bench-dvga` runner drives the GraphQL BOLA validator against
+# this:
+#   - VULN: a non-admin principal forges an unsigned {"identity":"admin"} token
+#     and reads admin's real password via `me(token)` — cross-user object access.
+#   - DECOY 1: forging a NON-privileged identity (operator) leaks nothing — the
+#     password is masked to "******" for non-admin identities.
+#   - DECOY 2: a public paste is readable by anyone (incl. anonymous) — public
+#     data, not a cross-user BOLA.
+
+id = "dvga-graphql-bola"
+name = "DVGA: GraphQL JWT-identity authorization bypass (me{password})"
+kind = "graphql"
+
+# --- provenance (verified May 2026; opened the LICENSE file, did not assume) ---
+source = "https://github.com/dolevf/Damn-Vulnerable-GraphQL-Application"
+source_commit = "a961308c02d1fb462b192681c336b0739e432da7"   # 2025-05-24
+license = "MIT"                                               # SPDX, verified in repo LICENSE.md
+authorized = true
+
+# --- how the target is obtained and run ---
+# Vendored out-of-tree via scripts/fetch_dvga.sh: clones the source for audit and
+# pulls the upstream image pinned by digest. Runtime is the Docker image; the
+# git commit above is the source the ground truth was authored from. The live
+# image's behaviour was confirmed to match that source (password leak via forged
+# identity; masking for non-admin identities).
+fetch_script = "scripts/fetch_dvga.sh"
+image = "dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957"
+image_tag = "dolevf/dvga:latest"
+run_method = "docker run -p <port>:5013 -e WEB_HOST=0.0.0.0"
+container_port = 5013
+host_port = 5013
+
+# --- vuln mechanics (line refs into the pinned source) ---
+# core/helpers.py:20-21  get_identity: jwt.decode(token, verify_signature=False)
+# core/views.py:60-65    UserObject.resolve_password: returns real password iff
+#                        request identity == 'admin', else '******'
+# Seed users: admin (id 1, password "changeme"), operator (id 2).
+owner_login_username = "admin"
+owner_login_password = "changeme"
+
+# DVGA difficulty is pinned per-request to "Beginner" via the X-DVGA-MODE header
+# so the protection middlewares are deterministic; the bypass itself is
+# mode-independent.
+difficulty_header = "Beginner"

@@ -1,0 +1,48 @@
+{
+  "case_id": "vampi-bola-books",
+  "description": "Hand-labelled ground truth for the erev0s/VAmPI external target (BOLA on GET /books/v1/{book}). Each probe is a (mode, endpoint, attacker_profile, object_id) tuple the bench-vampi runner drives through the real BolaValidator. `mode` selects the vulnerable (vulnerable=1) or secure (vulnerable=0) instance of the SAME target. expected_label is what the validator/classifier MUST conclude. The secure-instance probe is the decoy/negative set: the same bug toggled off must produce ZERO findings.",
+  "ground_truth_version": 1,
+  "source": "https://github.com/erev0s/VAmPI",
+  "source_commit": "f16052dce83f05847133ec98f01c5193a41de7d8",
+  "license": "MIT",
+  "vulnerabilities": [
+    {
+      "id": "vuln-bola-books-vulnerable",
+      "class": "BrokenObjectLevelAuthorization",
+      "mode": "vulnerable",
+      "endpoint": "GET /books/v1/{book}",
+      "object_id": "baloncore-bola-probe",
+      "owner_profile": "name1",
+      "attacker_profile": "name2",
+      "expected_label": "TruePositive",
+      "rationale": "api_views/books.py:50-58 (get_by_title): when vuln=1 the book is fetched by title with NO owner filter, so name2 reads name1's book including secret_content. Real cross-user BOLA.",
+      "expected_evidence_substrings": ["BALONCORE_PLANTED_SECRET", "baloncore-bola-probe"]
+    }
+  ],
+  "decoys": [
+    {
+      "id": "decoy-bola-books-secure",
+      "class": "BlockedAsExpected",
+      "mode": "secure",
+      "endpoint": "GET /books/v1/{book}",
+      "object_id": "baloncore-bola-probe",
+      "owner_profile": "name1",
+      "attacker_profile": "name2",
+      "expected_label": "TrueNegative",
+      "rationale": "api_views/books.py:61-70: when vuln=0 the query is owner-scoped (filter_by(user=user, ...)), so name2 requesting name1's book gets HTTP 404 'Book not found!'. The SAME probe as the planted vuln, bug toggled off. Any finding here is a false positive and must be counted as a decoy hit.",
+      "expected_evidence_substrings": []
+    },
+    {
+      "id": "decoy-owner-self-access",
+      "class": "IntendedOwnerAccess",
+      "mode": "vulnerable",
+      "endpoint": "GET /books/v1/{book}",
+      "object_id": "baloncore-bola-probe",
+      "owner_profile": "name1",
+      "attacker_profile": "name1",
+      "expected_label": "TrueNegative",
+      "rationale": "name1 reading name1's OWN book returns HTTP 200 + secret on BOTH builds — this is legitimate, authorized access. A scanner that flags any cross-id 200 without checking ownership would mis-flag this; the classifier must report IntendedOwnerAccess, not a finding.",
+      "expected_evidence_substrings": []
+    }
+  ]
+}

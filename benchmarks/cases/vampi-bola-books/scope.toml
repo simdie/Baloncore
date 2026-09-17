@@ -1,0 +1,8 @@
+# BALONCORE scope contract authorizing scans of the locally-vendored VAmPI target.
+[scope]
+allow_urls = ["http://127.0.0.1:5001", "http://127.0.0.1:5002"]
+allow_hosts = ["127.0.0.1", "localhost"]
+deny_hosts = []
+max_depth = 3
+authorized = true
+notes = "Locally-vendored erev0s/VAmPI (MIT) booted by bench-vampi: port 5001 = vulnerable build, 5002 = secure build. Do not point this scope at any other host."

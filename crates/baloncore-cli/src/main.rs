@@ -646,6 +646,231 @@ enum Commands {
         json: bool,
     },
 
+    /// P2.S3 external corpus — bring up the locally-vendored VAmPI target in
+    /// BOTH vulnerable and secure modes, drive the same BOLA probe at each
+    /// through the real BolaValidator, score against the hand-labelled ground
+    /// truth, and tear both instances down. The secure build is the decoy /
+    /// negative set: the same bug toggled off must produce ZERO findings.
+    ///
+    /// Requires the target to be vendored first (network + pip): run
+    /// `scripts/fetch_vampi.sh`. Errors loudly (NEEDS-HUMAN) if the checkout or
+    /// its venv is missing, or if `python` can't boot the app.
+    BenchVampi {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-vampi/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-vampi/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Vendored VAmPI checkout (created by scripts/fetch_vampi.sh).
+        #[arg(long, default_value = ".baloncore/corpus/vampi/VAmPI")]
+        vampi_dir: PathBuf,
+        /// Ground-truth JSON describing planted vulns and decoys (with `mode`).
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/vampi-bola-books/ground_truth.json"
+        )]
+        ground_truth: PathBuf,
+        /// TCP port for the vulnerable build.
+        #[arg(long, default_value_t = 5001)]
+        vulnerable_port: u16,
+        /// TCP port for the secure build.
+        #[arg(long, default_value_t = 5002)]
+        secure_port: u16,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// P2.S3 external corpus — run the locally-vendored DVGA Docker image,
+    /// drive its GraphQL JWT-identity authorization bypass through the real
+    /// GraphQlBolaValidator, score against the hand-labelled ground truth, and
+    /// tear the container down. The forged-admin probe is the planted true
+    /// positive; the masked-non-admin and public-paste probes are decoys.
+    ///
+    /// Requires the target to be vendored first (Docker pull): run
+    /// `scripts/fetch_dvga.sh`. Errors loudly (NEEDS-HUMAN) if Docker is
+    /// unavailable or the image is missing.
+    BenchDvga {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-dvga/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-dvga/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Ground-truth JSON describing the planted vuln and decoys.
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/dvga-graphql-bola/ground_truth.json"
+        )]
+        ground_truth: PathBuf,
+        /// Docker image (digest-pinned) to run.
+        #[arg(
+            long,
+            default_value = "dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957"
+        )]
+        image: String,
+        /// Host port mapped to the container's 5013.
+        #[arg(long, default_value_t = 5013)]
+        host_port: u16,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// P2.S3 external corpus — bring the OWASP crAPI Docker Compose stack up,
+    /// drive its flagship BOLA (read another user's vehicle location by GUID)
+    /// through the real BolaValidator, score against the hand-labelled ground
+    /// truth, and tear the WHOLE stack (containers + volumes) down on every exit
+    /// path. Waits for real stack readiness (owner login succeeds), not just
+    /// "compose up returned"; a half-started stack is an explicit error.
+    ///
+    /// Requires the stack vendored + images pulled: run `scripts/fetch_crapi.sh`.
+    /// Errors loudly (NEEDS-HUMAN) if Docker/compose/images are unavailable.
+    BenchCrapi {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-crapi/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-crapi/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Ground-truth JSON describing the planted vuln and decoys.
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/crapi-bola-vehicle/ground_truth.json"
+        )]
+        ground_truth: PathBuf,
+        /// Vendored crAPI checkout (created by scripts/fetch_crapi.sh).
+        #[arg(long, default_value = ".baloncore/corpus/crapi/crAPI")]
+        crapi_dir: PathBuf,
+        /// Compose file path, relative to crapi_dir.
+        #[arg(long, default_value = "deploy/docker/docker-compose.yml")]
+        compose_file: PathBuf,
+        /// Host port the crapi-web nginx is published on.
+        #[arg(long, default_value_t = 8888)]
+        host_port: u16,
+        /// Seconds to wait for the stack to become ready (Java seeding is slow).
+        #[arg(long, default_value_t = 300)]
+        readiness_timeout_secs: u64,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// P2.S3 external corpus — analyze the vendored bridgecrewio/TerraGoat
+    /// static Terraform OFFLINE (no server, no Docker, no network): parse the
+    /// `.tf` files into an IAM graph, run analyze-cloud-iam detection (public
+    /// exposure + over-privileged IAM), and score findings against the
+    /// hand-labelled ground truth. Decoys include correctly-configured negative
+    /// controls the analyzer must NOT flag.
+    ///
+    /// Requires the corpus vendored: run `scripts/fetch_terragoat.sh`. Errors
+    /// (NEEDS-HUMAN) if the `.tf` files are missing.
+    BenchTerragoat {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-terragoat/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-terragoat/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Ground-truth JSON describing planted vulns and decoys.
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/terragoat-iam/ground_truth.json"
+        )]
+        ground_truth: PathBuf,
+        /// Vendored TerraGoat checkout (created by scripts/fetch_terragoat.sh).
+        #[arg(long, default_value = ".baloncore/corpus/terragoat/terragoat")]
+        terragoat_dir: PathBuf,
+        /// BALONCORE negative-control .tf (correctly-configured decoys).
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/terragoat-iam/negative_controls.tf"
+        )]
+        negative_controls: PathBuf,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// P2.S3 external corpus — analyze the vendored bridgecrewio/Cfngoat static
+    /// CloudFormation OFFLINE (no server, no Docker, no network): parse the
+    /// `.yaml` template (CFN short-form intrinsics handled) into an IAM graph,
+    /// run analyze-cloud-iam detection (public exposure + over-privileged IAM),
+    /// and score findings against the hand-labelled ground truth. Decoys are
+    /// correctly-configured negative controls the analyzer must NOT flag.
+    ///
+    /// Requires the corpus vendored: run `scripts/fetch_cfngoat.sh` (fetch-only;
+    /// Cfngoat has no license and is never committed). Errors (NEEDS-HUMAN) if
+    /// the template is missing.
+    BenchCfngoat {
+        /// Where the BenchmarkRun JSON is written.
+        #[arg(long, default_value = ".baloncore/bench-cfngoat/benchmark_run.json")]
+        run_results_output: PathBuf,
+        /// Where the produced scorecard is written.
+        #[arg(long, default_value = ".baloncore/bench-cfngoat/scorecard.json")]
+        scorecard_output: PathBuf,
+        /// Ground-truth JSON describing planted vulns and decoys.
+        #[arg(long, default_value = "benchmarks/cases/cfngoat-iam/ground_truth.json")]
+        ground_truth: PathBuf,
+        /// Vendored Cfngoat checkout (created by scripts/fetch_cfngoat.sh).
+        #[arg(long, default_value = ".baloncore/corpus/cfngoat/cfngoat")]
+        cfngoat_dir: PathBuf,
+        /// Template file within cfngoat_dir to analyze.
+        #[arg(long, default_value = "cfngoat.yaml")]
+        template: PathBuf,
+        /// BALONCORE negative-control CloudFormation (correctly-configured decoys).
+        #[arg(
+            long,
+            default_value = "benchmarks/cases/cfngoat-iam/negative_controls.yaml"
+        )]
+        negative_controls: PathBuf,
+        /// Print the resulting scorecard JSON to stdout.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// A1 — JWT auth-bypass finder against DVGA. Boots the pinned DVGA image,
+    /// runs the JwtAuthFinder (forged-token cross-identity access), scores
+    /// against the hand-labelled ground truth, tears the container down.
+    /// Requires `scripts/fetch_dvga.sh`. NEEDS-HUMAN if Docker/image is missing.
+    BenchJwtDvga {
+        #[arg(long, default_value = ".baloncore/bench-jwt-dvga/benchmark_run.json")]
+        run_results_output: PathBuf,
+        #[arg(long, default_value = ".baloncore/bench-jwt-dvga/scorecard.json")]
+        scorecard_output: PathBuf,
+        #[arg(long, default_value = "benchmarks/cases/jwt-dvga/ground_truth.json")]
+        ground_truth: PathBuf,
+        #[arg(
+            long,
+            default_value = "dolevf/dvga@sha256:040aa33c199d99f3380c9ff9a1ee5d725e9abca7b189c63a35a2a73bda79c957"
+        )]
+        image: String,
+        #[arg(long, default_value_t = 5013)]
+        host_port: u16,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// A1 — JWT auth-bypass finder against VAmPI. Boots the vulnerable VAmPI
+    /// instance (venv), runs the JwtAuthFinder (weak-secret HMAC forgery +
+    /// alg=none and public-endpoint decoys), scores, tears it down. Requires
+    /// `scripts/fetch_vampi.sh`. NEEDS-HUMAN if the venv is missing.
+    BenchJwtVampi {
+        #[arg(long, default_value = ".baloncore/bench-jwt-vampi/benchmark_run.json")]
+        run_results_output: PathBuf,
+        #[arg(long, default_value = ".baloncore/bench-jwt-vampi/scorecard.json")]
+        scorecard_output: PathBuf,
+        #[arg(long, default_value = "benchmarks/cases/jwt-vampi/ground_truth.json")]
+        ground_truth: PathBuf,
+        #[arg(long, default_value = ".baloncore/corpus/vampi/VAmPI")]
+        vampi_dir: PathBuf,
+        #[arg(long, default_value_t = 5001)]
+        lab_port: u16,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run benchmark evaluation and CI gate against REAL run artifacts.
     ///
     /// `--run-results` must point at a `BenchmarkRun` JSON produced by an actual
@@ -1455,6 +1680,119 @@ fn main() -> Result<()> {
             config,
             owner_profile,
             object_id,
+            json,
+        ),
+        Commands::BenchVampi {
+            run_results_output,
+            scorecard_output,
+            vampi_dir,
+            ground_truth,
+            vulnerable_port,
+            secure_port,
+            json,
+        } => bench_vampi(
+            run_results_output,
+            scorecard_output,
+            vampi_dir,
+            ground_truth,
+            vulnerable_port,
+            secure_port,
+            json,
+        ),
+        Commands::BenchDvga {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            image,
+            host_port,
+            json,
+        } => bench_dvga(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            image,
+            host_port,
+            json,
+        ),
+        Commands::BenchCrapi {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            crapi_dir,
+            compose_file,
+            host_port,
+            readiness_timeout_secs,
+            json,
+        } => bench_crapi(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            crapi_dir,
+            compose_file,
+            host_port,
+            readiness_timeout_secs,
+            json,
+        ),
+        Commands::BenchTerragoat {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            terragoat_dir,
+            negative_controls,
+            json,
+        } => bench_terragoat(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            terragoat_dir,
+            negative_controls,
+            json,
+        ),
+        Commands::BenchCfngoat {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            cfngoat_dir,
+            template,
+            negative_controls,
+            json,
+        } => bench_cfngoat(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            cfngoat_dir,
+            template,
+            negative_controls,
+            json,
+        ),
+        Commands::BenchJwtDvga {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            image,
+            host_port,
+            json,
+        } => bench_jwt_dvga(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            image,
+            host_port,
+            json,
+        ),
+        Commands::BenchJwtVampi {
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            vampi_dir,
+            lab_port,
+            json,
+        } => bench_jwt_vampi(
+            run_results_output,
+            scorecard_output,
+            ground_truth,
+            vampi_dir,
+            lab_port,
             json,
         ),
         Commands::BenchmarkCi {
@@ -9957,6 +10295,1639 @@ fn bench_saas(
     let _ = lab.kill();
     let _ = lab.wait();
 
+    Ok(())
+}
+
+/// The secret the runner plants into VAmPI so the BOLA probe is deterministic
+/// (VAmPI's own seed book titles/secrets are randomised). Must match the
+/// `expected_evidence_substrings` in the case's ground_truth.json.
+const VAMPI_PLANTED_SECRET: &str = "BALONCORE_PLANTED_SECRET";
+
+/// Map a VAmPI seed username to its seed password (models/user_model.py
+/// init_db_users: name1/pass1, name2/pass2, admin/pass1).
+fn vampi_password_for(username: &str) -> String {
+    match username {
+        "admin" => "pass1".to_string(),
+        other => other.replace("name", "pass"),
+    }
+}
+
+/// RAII guard that always kills a spawned child process.
+struct ChildGuard(std::process::Child);
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bench_vampi(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    vampi_dir: PathBuf,
+    ground_truth_path: PathBuf,
+    vulnerable_port: u16,
+    secure_port: u16,
+    json: bool,
+) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    // --- preflight: the target must be vendored (NEEDS-HUMAN otherwise) ---
+    let needs_human = |what: &str| -> anyhow::Error {
+        anyhow::anyhow!(
+            "bench-vampi: {what}. VAmPI is an external target that needs a network \
+             fetch + pip install before it can run. Run `scripts/fetch_vampi.sh` \
+             (clones the pinned commit and installs deps into a venv), then re-run \
+             `bench-vampi`. This step is NEEDS-HUMAN by design — it requires network."
+        )
+    };
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-vampi: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+    if !vampi_dir.join("config.py").exists() {
+        return Err(needs_human(&format!(
+            "VAmPI checkout not found at {} (no config.py)",
+            vampi_dir.display()
+        )));
+    }
+    if !vampi_dir.join(".venv/bin/python").exists() {
+        return Err(needs_human(&format!(
+            "VAmPI venv interpreter not found at {}",
+            vampi_dir.join(".venv/bin/python").display()
+        )));
+    }
+    // The child runs with current_dir = vampi_dir, so a relative program path
+    // would be resolved against that dir and fail. Make it absolute — but
+    // canonicalize the DIRECTORY, not the interpreter symlink: resolving the
+    // `.venv/bin/python -> python3.12 -> /opt/.../python3.12` chain would point
+    // outside the venv and lose its site-packages. Python detects the venv from
+    // the path it is invoked with, so we must keep it inside `.venv/bin`.
+    let vampi_dir = std::fs::canonicalize(&vampi_dir)
+        .with_context(|| format!("canonicalize {}", vampi_dir.display()))?;
+    let venv_python = vampi_dir.join(".venv/bin/python");
+
+    let gt = baloncore_core::VampiGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::vampi_bola_suite(&gt);
+
+    let runner = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+
+    // Where to capture each build's boot stderr so a failed boot is debuggable
+    // (e.g. the NEEDS-HUMAN "venv missing a dep" case) rather than silent.
+    let log_dir = run_results_output
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-vampi"));
+    fs::create_dir_all(&log_dir).with_context(|| format!("create {}", log_dir.display()))?;
+
+    // The two builds share one sqlite file in the same checkout, so they must
+    // run sequentially. We drive every probe whose `mode` matches the running
+    // build, tear it down, then bring up the next build.
+    let mut validations: Vec<serde_json::Value> = Vec::new();
+    for (mode, port, vuln_flag) in [
+        ("vulnerable", vulnerable_port, 1u8),
+        ("secure", secure_port, 0u8),
+    ] {
+        let probes: Vec<_> = gt
+            .all_probes()
+            .into_iter()
+            .filter(|p| p.mode == mode)
+            .collect();
+        if probes.is_empty() {
+            continue;
+        }
+
+        // Boot this build. cwd = checkout so `from config import vuln_app`
+        // resolves; bind to 127.0.0.1 (NOT 0.0.0.0) for the local benchmark.
+        let bootstrap = format!(
+            "from config import vuln_app; vuln_app.run(host='127.0.0.1', port={port}, debug=False)"
+        );
+        let boot_log_path = log_dir.join(format!("{mode}.boot.log"));
+        let dbg_log = std::fs::File::create(&boot_log_path).ok();
+        let child = Command::new(&venv_python)
+            .arg("-c")
+            .arg(&bootstrap)
+            .current_dir(&vampi_dir)
+            .env("vulnerable", vuln_flag.to_string())
+            .env("tokentimetolive", "600")
+            .stdout(Stdio::null())
+            .stderr(match dbg_log {
+                Some(f) => Stdio::from(f),
+                None => Stdio::null(),
+            })
+            .spawn()
+            .with_context(|| format!("spawn VAmPI ({mode}) via {}", venv_python.display()))?;
+        let _guard = ChildGuard(child);
+
+        let base_url = format!("http://127.0.0.1:{port}");
+
+        // Poll the home endpoint until ready AND confirm the build actually
+        // came up in the mode we asked for (integrity check on the toggle).
+        let started = std::time::Instant::now();
+        let mut home_body = String::new();
+        let mut ready = false;
+        while started.elapsed() < std::time::Duration::from_secs(20) {
+            if let Ok(ex) = runner.send(&get_spec("home", "anonymous", &base_url)) {
+                if (200..300).contains(&ex.status) {
+                    home_body = ex.response_body_excerpt;
+                    ready = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        if !ready {
+            bail!(
+                "bench-vampi: {mode} build did not become ready on {base_url} within 20s. \
+                 See boot log: {} (a missing Python dep means the venv is incomplete — \
+                 re-run scripts/fetch_vampi.sh).",
+                boot_log_path.display()
+            );
+        }
+        let reported_vuln = home_body
+            .split("\"vulnerable\"")
+            .nth(1)
+            .and_then(|s| s.trim_start_matches([':', ' ']).chars().next());
+        let expected_char = char::from(b'0' + vuln_flag);
+        if reported_vuln != Some(expected_char) {
+            bail!(
+                "bench-vampi: {mode} build reported vulnerable={:?} but expected {} \
+                 (the on/off toggle did not take effect — refusing to score)",
+                reported_vuln,
+                expected_char
+            );
+        }
+
+        // Populate the seed users (name1/name2/admin) + reset the DB.
+        let createdb = runner
+            .send(&get_spec(
+                "createdb",
+                "anonymous",
+                &format!("{base_url}/createdb"),
+            ))
+            .with_context(|| format!("createdb on {mode} build"))?;
+        if !(200..300).contains(&createdb.status) {
+            bail!(
+                "bench-vampi: /createdb on {mode} build returned {}",
+                createdb.status
+            );
+        }
+
+        // Log in each distinct profile this build needs, caching the token.
+        let mut tokens: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut login = |username: &str| -> Result<String> {
+            if let Some(t) = tokens.get(username) {
+                return Ok(t.clone());
+            }
+            let body = serde_json::json!({
+                "username": username,
+                "password": vampi_password_for(username),
+            });
+            let ex = runner
+                .send_with_json_body(
+                    &post_spec(
+                        &format!("login-{username}"),
+                        username,
+                        &format!("{base_url}/users/v1/login"),
+                    ),
+                    Some(&body),
+                )
+                .with_context(|| format!("login {username} on {mode} build"))?;
+            let token = serde_json::from_str::<serde_json::Value>(&ex.response_body_excerpt)
+                .ok()
+                .and_then(|v| {
+                    v.get("auth_token")
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "bench-vampi: could not parse auth_token for {username} on {mode} build \
+                         (status {}, body: {})",
+                        ex.status,
+                        ex.response_body_excerpt
+                    )
+                })?;
+            tokens.insert(username.to_string(), token.clone());
+            Ok(token)
+        };
+
+        // Plant each distinct (owner, book_title) this build's probes reference.
+        let mut planted: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        for probe in &probes {
+            let key = (probe.owner_profile.clone(), probe.object_id.clone());
+            if !planted.insert(key) {
+                continue;
+            }
+            let owner_token = login(&probe.owner_profile)?;
+            let body = serde_json::json!({
+                "book_title": probe.object_id,
+                "secret": VAMPI_PLANTED_SECRET,
+            });
+            let mut spec = post_spec(
+                &format!("plant-{}", probe.object_id),
+                &probe.owner_profile,
+                &format!("{base_url}/books/v1"),
+            );
+            spec.bearer_token = Some(owner_token);
+            let ex = runner
+                .send_with_json_body(&spec, Some(&body))
+                .with_context(|| format!("plant book {} on {mode} build", probe.object_id))?;
+            if !(200..300).contains(&ex.status) {
+                bail!(
+                    "bench-vampi: planting book {} as {} on {mode} build returned {} ({})",
+                    probe.object_id,
+                    probe.owner_profile,
+                    ex.status,
+                    ex.response_body_excerpt
+                );
+            }
+        }
+
+        // Drive each probe through the real BolaValidator/classifier.
+        for probe in &probes {
+            let owner_token = login(&probe.owner_profile)?;
+            let attacker_token = login(&probe.attacker_profile)?;
+            let book_url = format!("{base_url}/books/v1/{}", probe.object_id);
+
+            let mut owner_spec = get_spec(
+                &format!("owner-{}", probe.id),
+                &probe.owner_profile,
+                &book_url,
+            );
+            owner_spec.bearer_token = Some(owner_token);
+            let owner_exchange = runner
+                .send(&owner_spec)
+                .with_context(|| format!("owner exchange {}", probe.id))?;
+
+            let mut attacker_spec = get_spec(
+                &format!("attacker-{}", probe.id),
+                &probe.attacker_profile,
+                &book_url,
+            );
+            attacker_spec.bearer_token = Some(attacker_token);
+            let attacker_exchange = runner
+                .send(&attacker_spec)
+                .with_context(|| format!("attacker exchange {}", probe.id))?;
+
+            let anonymous_exchange = runner
+                .send(&get_spec(
+                    &format!("anon-{}", probe.id),
+                    "anonymous",
+                    &book_url,
+                ))
+                .with_context(|| format!("anonymous exchange {}", probe.id))?;
+
+            let endpoint_descriptor = baloncore_core::web_api::ApiEndpoint {
+                id: probe.endpoint.clone(),
+                method: baloncore_core::web_api::HttpMethod::Get,
+                url_template: format!("{base_url}/books/v1/{{book}}"),
+                source: baloncore_core::web_api::EndpointSource::OpenApi,
+                requires_auth: Some(true),
+                path_parameters: vec!["book".to_string()],
+                tags: vec!["vampi".to_string(), "books".to_string()],
+            };
+
+            let case = baloncore_core::web_api::BolaValidationCase {
+                endpoint: endpoint_descriptor,
+                object_id: probe.object_id.clone(),
+                owner_profile: probe.owner_profile.clone(),
+                attacker_profile: probe.attacker_profile.clone(),
+                owner_markers: vec![probe.object_id.clone(), VAMPI_PLANTED_SECRET.to_string()],
+                owner_exchange,
+                attacker_exchange: attacker_exchange.clone(),
+                anonymous_exchange: Some(anonymous_exchange.clone()),
+            };
+
+            let attacker_role = if probe.attacker_profile == "admin" {
+                "admin"
+            } else {
+                "user"
+            };
+            let observation = baloncore_core::web_api::AuthorizationMatrixObservation::classify(
+                &case,
+                "user",
+                attacker_role,
+            );
+
+            // Real markers: which owner-evidence strings actually appear in the
+            // attacker's response body. Empty unless the attacker really read
+            // the owner's object.
+            let evidence_markers: Vec<String> = [probe.object_id.as_str(), VAMPI_PLANTED_SECRET]
+                .into_iter()
+                .filter(|m| attacker_exchange.response_body_excerpt.contains(m))
+                .map(String::from)
+                .collect();
+
+            validations.push(serde_json::json!({
+                "mode": mode,
+                "profile": probe.attacker_profile,
+                "role": attacker_role,
+                "endpoint": probe.endpoint,
+                "object_id": probe.object_id,
+                "classification": format!("{:?}", observation.classification),
+                "decision": { "Verified": { "evidence_markers": evidence_markers } },
+                "owner_status": case.owner_exchange.status,
+                "attacker_status": attacker_exchange.status,
+                "anonymous_status": anonymous_exchange.status,
+            }));
+        }
+
+        // _guard drops here → this build is torn down before the next boots.
+    }
+
+    let matrix = serde_json::json!({ "validations": validations });
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-vampi/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+    let matrix_path = scan_run_dir.join("matrix_summary.json");
+    fs::write(&matrix_path, serde_json::to_string_pretty(&matrix)?)
+        .with_context(|| format!("write {}", matrix_path.display()))?;
+
+    let run = baloncore_core::score_vampi_matrix_summary(&matrix, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nMatrix:       {}", matrix_path.display());
+        println!("BenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("Both VAmPI builds torn down automatically.");
+    }
+    Ok(())
+}
+
+/// A bodyless GET request spec for the given id/profile/url.
+fn get_spec(id: &str, profile: &str, url: &str) -> baloncore_core::web_api::HttpRequestSpec {
+    baloncore_core::web_api::HttpRequestSpec {
+        id: id.to_string(),
+        profile: profile.to_string(),
+        method: baloncore_core::web_api::HttpMethod::Get,
+        url: url.to_string(),
+        bearer_token: None,
+        cookies: vec![],
+        headers: vec![],
+        csrf_token_header: None,
+        csrf_token: None,
+    }
+}
+
+/// A POST request spec (body attached separately via send_with_json_body).
+fn post_spec(id: &str, profile: &str, url: &str) -> baloncore_core::web_api::HttpRequestSpec {
+    baloncore_core::web_api::HttpRequestSpec {
+        id: id.to_string(),
+        profile: profile.to_string(),
+        method: baloncore_core::web_api::HttpMethod::Post,
+        url: url.to_string(),
+        bearer_token: None,
+        cookies: vec![],
+        headers: vec![],
+        csrf_token_header: None,
+        csrf_token: None,
+    }
+}
+
+/// Forge an UNSIGNED JWT carrying `{"identity": <identity>}`. DVGA decodes
+/// tokens with signature verification disabled, so this is exactly the attack:
+/// a principal who knows no secret mints a token claiming any identity.
+fn dvga_forge_jwt(identity: &str) -> String {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let header = b64.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+    let payload = b64.encode(format!(r#"{{"identity":"{identity}"}}"#).as_bytes());
+    // Non-empty but bogus signature segment; DVGA never verifies it.
+    format!("{header}.{payload}.AAAA")
+}
+
+/// POST a GraphQL document to DVGA, pinning Beginner difficulty for determinism.
+fn dvga_post_graphql(
+    runner: &baloncore_core::web_api::HttpRequestRunner,
+    url: &str,
+    id: &str,
+    profile: &str,
+    query: &str,
+) -> Result<baloncore_core::web_api::HttpExchange> {
+    let mut spec = post_spec(id, profile, url);
+    spec.headers = vec![("X-DVGA-MODE".to_string(), "Beginner".to_string())];
+    let body = serde_json::json!({ "query": query });
+    runner
+        .send_with_json_body(&spec, Some(&body))
+        .with_context(|| format!("graphql POST {id}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bench_dvga(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    image: String,
+    host_port: u16,
+    json: bool,
+) -> Result<()> {
+    use baloncore_core::web_api::{
+        ApiEndpoint, EndpointSource, GraphQlBolaDecision, GraphQlBolaValidationCase,
+        GraphQlBolaValidator, GraphQlOperationType, HttpMethod,
+    };
+    use std::process::{Command, Stdio};
+
+    let needs_human = |what: &str| -> anyhow::Error {
+        anyhow::anyhow!(
+            "bench-dvga: {what}. DVGA is an external target that runs as a Docker image. \
+             Ensure Docker is running and run `scripts/fetch_dvga.sh` to pull the pinned \
+             image, then re-run `bench-dvga`. This step is NEEDS-HUMAN by design."
+        )
+    };
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-dvga: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+    // Preflight: docker present + daemon up + image available locally.
+    if Command::new("docker")
+        .arg("info")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human(
+            "Docker is not available or its daemon is not running",
+        ));
+    }
+    if Command::new("docker")
+        .args(["image", "inspect", &image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human(&format!(
+            "the DVGA image {image} is not present locally"
+        )));
+    }
+
+    let gt = baloncore_core::DvgaGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::dvga_graphql_bola_suite(&gt);
+
+    // Boot the container; RAII guard removes it on every exit path.
+    let container_name = format!("baloncore-dvga-bench-{}", std::process::id());
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &container_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let run_status = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            &container_name,
+            "-p",
+            &format!("127.0.0.1:{host_port}:5013"),
+            "-e",
+            "WEB_HOST=0.0.0.0",
+            &image,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("docker run DVGA")?;
+    if !run_status.success() {
+        bail!("bench-dvga: `docker run` for {image} failed");
+    }
+    struct ContainerGuard(String);
+    impl Drop for ContainerGuard {
+        fn drop(&mut self) {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &self.0])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    let _guard = ContainerGuard(container_name.clone());
+
+    let base_url = format!("http://127.0.0.1:{host_port}");
+    let graphql_url = format!("{base_url}/graphql");
+    let runner = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+
+    // Poll the home page until the app is serving.
+    let started = std::time::Instant::now();
+    let mut ready = false;
+    while started.elapsed() < std::time::Duration::from_secs(30) {
+        if let Ok(ex) = runner.send(&get_spec("dvga-home", "anonymous", &base_url)) {
+            if (200..500).contains(&ex.status) {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    if !ready {
+        bail!("bench-dvga: DVGA did not become ready on {base_url} within 30s");
+    }
+
+    let endpoint = ApiEndpoint {
+        id: "POST /graphql".to_string(),
+        method: HttpMethod::Post,
+        url_template: graphql_url.clone(),
+        source: EndpointSource::GraphQl,
+        requires_auth: Some(true),
+        path_parameters: vec![],
+        tags: vec!["dvga".to_string(), "graphql".to_string()],
+    };
+
+    let mut validations: Vec<serde_json::Value> = Vec::new();
+    for probe in gt.all_probes() {
+        // Build the owner / attacker / anonymous GraphQL exchanges for this
+        // probe's operation.
+        let (owner_ex, attacker_ex, anon_ex) = match probe.operation.as_str() {
+            "me" => {
+                // Owner baseline: a legitimately-issued token for owner_identity.
+                let owner_token = {
+                    let username = probe.owner_identity.as_deref().unwrap_or("admin");
+                    let password = probe.owner_login_password.as_deref().unwrap_or("");
+                    let login_q = format!(
+                        "mutation {{ login(username:\"{username}\", password:\"{password}\") {{ accessToken }} }}"
+                    );
+                    let ex =
+                        dvga_post_graphql(&runner, &graphql_url, "dvga-login", "owner", &login_q)?;
+                    serde_json::from_str::<serde_json::Value>(&ex.response_body_excerpt)
+                        .ok()
+                        .and_then(|v| {
+                            v.pointer("/data/login/accessToken")
+                                .and_then(|t| t.as_str())
+                                .map(String::from)
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "bench-dvga: could not obtain a legit token for {username} (body: {})",
+                                ex.response_body_excerpt
+                            )
+                        })?
+                };
+                let forged =
+                    dvga_forge_jwt(probe.attacker_forged_identity.as_deref().unwrap_or("admin"));
+                let me_q =
+                    |tok: &str| format!("{{ me(token:\"{tok}\") {{ id username password }} }}");
+                let owner_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("owner-{}", probe.id),
+                    &probe.owner_profile,
+                    &me_q(&owner_token),
+                )?;
+                let attacker_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("attacker-{}", probe.id),
+                    &probe.attacker_profile,
+                    &me_q(&forged),
+                )?;
+                let anon_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("anon-{}", probe.id),
+                    "anonymous",
+                    &me_q(""),
+                )?;
+                (owner_ex, attacker_ex, anon_ex)
+            }
+            "paste" => {
+                let paste_q = format!(
+                    "{{ paste(id:{}) {{ id title content public }} }}",
+                    probe.object_id
+                );
+                let owner_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("owner-{}", probe.id),
+                    &probe.owner_profile,
+                    &paste_q,
+                )?;
+                let attacker_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("attacker-{}", probe.id),
+                    &probe.attacker_profile,
+                    &paste_q,
+                )?;
+                let anon_ex = dvga_post_graphql(
+                    &runner,
+                    &graphql_url,
+                    &format!("anon-{}", probe.id),
+                    "anonymous",
+                    &paste_q,
+                )?;
+                (owner_ex, attacker_ex, anon_ex)
+            }
+            other => bail!("bench-dvga: unsupported probe operation `{other}`"),
+        };
+
+        let case = GraphQlBolaValidationCase {
+            endpoint: endpoint.clone(),
+            operation_name: probe.operation.clone(),
+            operation_type: GraphQlOperationType::Query,
+            id_argument: if probe.operation == "paste" {
+                "id"
+            } else {
+                "token"
+            }
+            .to_string(),
+            object_id: probe.object_id.clone(),
+            owner_profile: probe.owner_profile.clone(),
+            attacker_profile: probe.attacker_profile.clone(),
+            owner_markers: probe.owner_markers.clone(),
+            owner_exchange: owner_ex.clone(),
+            attacker_exchange: attacker_ex.clone(),
+            anonymous_exchange: Some(anon_ex.clone()),
+            tested_tenant: None,
+            owner_tenant: None,
+        };
+
+        let decision = GraphQlBolaValidator::default().validate(&case);
+        let (classification, evidence_markers) = match &decision {
+            GraphQlBolaDecision::Verified(f) => {
+                ("BrokenObjectLevelAuthorization", f.evidence_markers.clone())
+            }
+            GraphQlBolaDecision::Rejected(_) => ("BlockedAsExpected", Vec::new()),
+        };
+
+        validations.push(serde_json::json!({
+            "operation": probe.operation,
+            "object_id": probe.object_id,
+            "profile": probe.attacker_profile,
+            "classification": classification,
+            "decision": { "Verified": { "evidence_markers": evidence_markers } },
+            "owner_status": owner_ex.status,
+            "attacker_status": attacker_ex.status,
+            "anonymous_status": anon_ex.status,
+        }));
+    }
+
+    let matrix = serde_json::json!({ "validations": validations });
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-dvga/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+    let matrix_path = scan_run_dir.join("matrix_summary.json");
+    fs::write(&matrix_path, serde_json::to_string_pretty(&matrix)?)
+        .with_context(|| format!("write {}", matrix_path.display()))?;
+
+    let run = baloncore_core::score_dvga_matrix_summary(&matrix, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nMatrix:       {}", matrix_path.display());
+        println!("BenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("DVGA container torn down automatically.");
+    }
+    Ok(())
+}
+
+/// Public crAPI seed credentials (identity service TestUsers.java). These are
+/// fixed, public test accounts; the runner logs in as them to obtain tokens.
+fn crapi_seed_password(email: &str) -> Option<&'static str> {
+    match email {
+        "adam007@example.com" => Some("adam007!123"),
+        "pogba006@example.com" => Some("pogba006!123"),
+        "robot001@example.com" => Some("robot001!123"),
+        "test@example.com" => Some("Test!123"),
+        "admin@example.com" => Some("Admin!123"),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bench_crapi(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    crapi_dir: PathBuf,
+    compose_file: PathBuf,
+    host_port: u16,
+    readiness_timeout_secs: u64,
+    json: bool,
+) -> Result<()> {
+    use baloncore_core::web_api::{
+        ApiEndpoint, BolaDecision, BolaValidationCase, BolaValidator, EndpointSource, HttpMethod,
+    };
+    use std::process::{Command, Stdio};
+
+    let needs_human = |what: &str| -> anyhow::Error {
+        anyhow::anyhow!(
+            "bench-crapi: {what}. crAPI is an external multi-service target that runs as a \
+             Docker Compose stack. Ensure Docker is running and run `scripts/fetch_crapi.sh` \
+             (clones the pinned commit + pulls the pinned images), then re-run `bench-crapi`. \
+             This step is NEEDS-HUMAN by design."
+        )
+    };
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-crapi: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+    let compose_path = crapi_dir.join(&compose_file);
+    if !compose_path.exists() {
+        return Err(needs_human(&format!(
+            "compose file {} not found",
+            compose_path.display()
+        )));
+    }
+    if Command::new("docker")
+        .arg("info")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human(
+            "Docker is not available or its daemon is not running",
+        ));
+    }
+    if Command::new("docker")
+        .args(["compose", "version"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human("`docker compose` (v2) is not available"));
+    }
+
+    let gt = baloncore_core::CrapiGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::crapi_bola_suite(&gt);
+
+    // Absolute compose path + project dir (so the vendored .env is read).
+    let compose_path = std::fs::canonicalize(&compose_path)
+        .with_context(|| format!("canonicalize {}", compose_path.display()))?;
+    let project_dir = compose_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| anyhow::anyhow!("compose file has no parent dir"))?;
+    let project_name = format!("baloncore-crapi-{}", std::process::id());
+
+    let compose_args = |sub: &[&str]| -> Vec<String> {
+        let mut v = vec![
+            "compose".to_string(),
+            "--project-directory".to_string(),
+            project_dir.to_string_lossy().to_string(),
+            "-f".to_string(),
+            compose_path.to_string_lossy().to_string(),
+            "-p".to_string(),
+            project_name.clone(),
+        ];
+        v.extend(sub.iter().map(|s| s.to_string()));
+        v
+    };
+
+    // Bring the stack up.
+    eprintln!("bench-crapi: bringing the crAPI stack up (this is slow — Java services + DB seed)…");
+    let up = Command::new("docker")
+        .args(compose_args(&["up", "-d"]))
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()
+        .context("docker compose up")?;
+    if !up.success() {
+        bail!("bench-crapi: `docker compose up -d` failed");
+    }
+
+    // RAII guard: tear the WHOLE stack down (containers + volumes) on every
+    // exit path — success, error, or panic.
+    struct ComposeGuard {
+        args: Vec<String>,
+    }
+    impl Drop for ComposeGuard {
+        fn drop(&mut self) {
+            eprintln!("bench-crapi: tearing the crAPI stack down…");
+            let _ = Command::new("docker")
+                .args(&self.args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    let _guard = ComposeGuard {
+        args: compose_args(&["down", "-v", "--remove-orphans"]),
+    };
+
+    let base_url = format!("http://127.0.0.1:{host_port}");
+    let login_url = format!("{base_url}/identity/api/auth/login");
+    let runner = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+
+    // Helper: log in a seed user, return the bearer token.
+    let login = |email: &str| -> Result<String> {
+        let password = crapi_seed_password(email).ok_or_else(|| {
+            anyhow::anyhow!("bench-crapi: no known crAPI seed password for `{email}`")
+        })?;
+        let body = serde_json::json!({ "email": email, "password": password });
+        let ex = runner
+            .send_with_json_body(
+                &post_spec(&format!("login-{email}"), email, &login_url),
+                Some(&body),
+            )
+            .with_context(|| format!("login {email}"))?;
+        serde_json::from_str::<serde_json::Value>(&ex.response_body_excerpt)
+            .ok()
+            .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(String::from))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bench-crapi: login for {email} did not return a token (status {}, body {})",
+                    ex.status,
+                    ex.response_body_excerpt
+                )
+            })
+    };
+
+    // Readiness: poll the OWNER login until it returns a token. This proves the
+    // identity service is up AND the DB has been seeded — NOT merely that
+    // compose returned. A stack that never becomes ready is an explicit error.
+    let owner_email = gt
+        .all_probes()
+        .first()
+        .map(|p| p.owner_profile.clone())
+        .unwrap_or_else(|| "adam007@example.com".to_string());
+    let started = std::time::Instant::now();
+    let mut ready = false;
+    let mut last_err = String::new();
+    while started.elapsed() < std::time::Duration::from_secs(readiness_timeout_secs) {
+        match login(&owner_email) {
+            Ok(_) => {
+                ready = true;
+                break;
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+    if !ready {
+        bail!(
+            "bench-crapi: crAPI stack did not become ready within {readiness_timeout_secs}s \
+             (owner login never succeeded). Last error: {last_err}. The stack is being torn \
+             down. Increase --readiness-timeout-secs on a slow host, or check \
+             `docker compose -p {project_name} logs`."
+        );
+    }
+
+    // Token cache.
+    let mut tokens: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut token_for = |email: &str| -> Result<String> {
+        if let Some(t) = tokens.get(email) {
+            return Ok(t.clone());
+        }
+        let t = login(email)?;
+        tokens.insert(email.to_string(), t.clone());
+        Ok(t)
+    };
+
+    let mut validations: Vec<serde_json::Value> = Vec::new();
+    for probe in gt.all_probes() {
+        // endpoint template is e.g. "GET /identity/api/v2/vehicle/{object_id}/location"
+        let path = probe
+            .endpoint
+            .trim_start_matches("GET ")
+            .replace("{object_id}", &probe.object_id);
+        let url = format!("{base_url}{path}");
+
+        let owner_token = token_for(&probe.owner_profile)?;
+        let attacker_token = token_for(&probe.attacker_profile)?;
+
+        let mut owner_spec = get_spec(&format!("owner-{}", probe.id), &probe.owner_profile, &url);
+        owner_spec.bearer_token = Some(owner_token);
+        let owner_exchange = runner
+            .send(&owner_spec)
+            .with_context(|| format!("owner exchange {}", probe.id))?;
+
+        let mut attacker_spec = get_spec(
+            &format!("attacker-{}", probe.id),
+            &probe.attacker_profile,
+            &url,
+        );
+        attacker_spec.bearer_token = Some(attacker_token);
+        let attacker_exchange = runner
+            .send(&attacker_spec)
+            .with_context(|| format!("attacker exchange {}", probe.id))?;
+
+        let anonymous_exchange = runner
+            .send(&get_spec(&format!("anon-{}", probe.id), "anonymous", &url))
+            .with_context(|| format!("anonymous exchange {}", probe.id))?;
+
+        let endpoint_descriptor = ApiEndpoint {
+            id: probe.endpoint.clone(),
+            method: HttpMethod::Get,
+            url_template: format!("{base_url}{}", probe.endpoint.trim_start_matches("GET ")),
+            source: EndpointSource::OpenApi,
+            requires_auth: Some(true),
+            path_parameters: vec!["object_id".to_string()],
+            tags: vec!["crapi".to_string()],
+        };
+
+        let case = BolaValidationCase {
+            endpoint: endpoint_descriptor,
+            object_id: probe.object_id.clone(),
+            owner_profile: probe.owner_profile.clone(),
+            attacker_profile: probe.attacker_profile.clone(),
+            owner_markers: probe.owner_markers.clone(),
+            owner_exchange: owner_exchange.clone(),
+            attacker_exchange: attacker_exchange.clone(),
+            anonymous_exchange: Some(anonymous_exchange.clone()),
+        };
+
+        let decision = BolaValidator::default().validate(&case);
+        let (classification, evidence_markers) = match &decision {
+            BolaDecision::Verified(f) => {
+                ("BrokenObjectLevelAuthorization", f.evidence_markers.clone())
+            }
+            BolaDecision::Rejected(_) => ("BlockedAsExpected", Vec::new()),
+        };
+
+        validations.push(serde_json::json!({
+            "endpoint": probe.endpoint,
+            "object_id": probe.object_id,
+            "profile": probe.attacker_profile,
+            "classification": classification,
+            "decision": { "Verified": { "evidence_markers": evidence_markers } },
+            "owner_status": owner_exchange.status,
+            "attacker_status": attacker_exchange.status,
+            "anonymous_status": anonymous_exchange.status,
+        }));
+    }
+
+    let matrix = serde_json::json!({ "validations": validations });
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-crapi/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+    let matrix_path = scan_run_dir.join("matrix_summary.json");
+    fs::write(&matrix_path, serde_json::to_string_pretty(&matrix)?)
+        .with_context(|| format!("write {}", matrix_path.display()))?;
+
+    let run = baloncore_core::score_crapi_matrix_summary(&matrix, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nMatrix:       {}", matrix_path.display());
+        println!("BenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("crAPI stack torn down automatically.");
+    }
+    Ok(())
+}
+
+fn bench_terragoat(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    terragoat_dir: PathBuf,
+    negative_controls: PathBuf,
+    json: bool,
+) -> Result<()> {
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-terragoat: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+
+    // The real TerraGoat .tf files (planted vulns + the encrypted-bucket decoy)
+    // plus our negative-control decoys.
+    let aws_dir = terragoat_dir.join("terraform/aws");
+    let mut tf_files: Vec<PathBuf> = ["ec2.tf", "iam.tf", "s3.tf"]
+        .iter()
+        .map(|f| aws_dir.join(f))
+        .collect();
+    let missing: Vec<String> = tf_files
+        .iter()
+        .filter(|p| !p.exists())
+        .map(|p| p.display().to_string())
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "bench-terragoat: TerraGoat .tf files not found ({}). TerraGoat is an external \
+             target that must be vendored first: run `scripts/fetch_terragoat.sh` (git clone, \
+             no Docker/network at analysis time), then re-run `bench-terragoat`. This step is \
+             NEEDS-HUMAN by design.",
+            missing.join(", ")
+        );
+    }
+    if !negative_controls.exists() {
+        bail!(
+            "bench-terragoat: negative-controls file {} does not exist",
+            negative_controls.display()
+        );
+    }
+    tf_files.push(negative_controls);
+
+    let gt = baloncore_core::TerragoatGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::terragoat_iam_suite(&gt);
+
+    // Offline parse: HCL .tf -> IAMGraph, then the real analyzer.
+    let mut graph = baloncore_core::cloud_providers::terraform_hcl::ingest_hcl_files(&tf_files)
+        .map_err(|e| anyhow::anyhow!("bench-terragoat: HCL ingestion failed: {e}"))?;
+    let analysis = graph.analyze();
+
+    let run = baloncore_core::score_terragoat_findings(&analysis.findings, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    // Persist the raw findings alongside the run for inspection.
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-terragoat/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+    write_json(&scan_run_dir.join("cloud_iam_analysis.json"), &analysis)?;
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    let unmatched = baloncore_core::bench_terragoat::unmatched_findings(&analysis.findings, &gt);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nTotal analyzer findings: {}", analysis.findings.len());
+        println!(
+            "Findings outside ground truth (not scored): {}",
+            if unmatched.is_empty() {
+                "none".to_string()
+            } else {
+                unmatched.join("; ")
+            }
+        );
+        println!(
+            "Analysis:     {}",
+            scan_run_dir.join("cloud_iam_analysis.json").display()
+        );
+        println!("BenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("Offline IaC analysis — no containers, no network.");
+    }
+    Ok(())
+}
+
+fn bench_cfngoat(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    cfngoat_dir: PathBuf,
+    template: PathBuf,
+    negative_controls: PathBuf,
+    json: bool,
+) -> Result<()> {
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-cfngoat: ground-truth file {} does not exist",
+            ground_truth_path.display()
+        );
+    }
+    let template_path = cfngoat_dir.join(&template);
+    if !template_path.exists() {
+        bail!(
+            "bench-cfngoat: Cfngoat template {} not found. Cfngoat is an external target that \
+             must be vendored first: run `scripts/fetch_cfngoat.sh` (fetch-only — Cfngoat has no \
+             license and is never committed), then re-run `bench-cfngoat`. NEEDS-HUMAN by design.",
+            template_path.display()
+        );
+    }
+    if !negative_controls.exists() {
+        bail!(
+            "bench-cfngoat: negative-controls file {} does not exist",
+            negative_controls.display()
+        );
+    }
+
+    let gt = baloncore_core::CfngoatGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::cfngoat_iam_suite(&gt);
+
+    // Offline parse: CloudFormation YAML (target + negative controls) -> IAMGraph,
+    // then the real analyzer.
+    let templates = vec![template_path, negative_controls];
+    let mut graph =
+        baloncore_core::cloud_providers::cloudformation::CloudFormationIngestor::ingest_files(
+            &templates,
+        )
+        .map_err(|e| anyhow::anyhow!("bench-cfngoat: CloudFormation ingestion failed: {e}"))?;
+    let analysis = graph.analyze();
+
+    let run = baloncore_core::score_cfngoat_findings(&analysis.findings, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+
+    let scan_run_dir = run_results_output
+        .parent()
+        .map(|p| p.join("scan-run"))
+        .unwrap_or_else(|| PathBuf::from(".baloncore/bench-cfngoat/scan-run"));
+    fs::create_dir_all(&scan_run_dir)
+        .with_context(|| format!("create {}", scan_run_dir.display()))?;
+    write_json(&scan_run_dir.join("cloud_iam_analysis.json"), &analysis)?;
+
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("save BenchmarkRun: {e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("save scorecard: {e}"))?;
+
+    let unmatched = baloncore_core::bench_cfngoat::unmatched_findings(&analysis.findings, &gt);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nTotal analyzer findings: {}", analysis.findings.len());
+        println!(
+            "Findings outside ground truth (not scored): {}",
+            if unmatched.is_empty() {
+                "none".to_string()
+            } else {
+                unmatched.join("; ")
+            }
+        );
+        println!(
+            "Analysis:     {}",
+            scan_run_dir.join("cloud_iam_analysis.json").display()
+        );
+        println!("BenchmarkRun: {}", run_results_output.display());
+        println!("Scorecard:    {}", scorecard_output.display());
+        println!("Offline CloudFormation analysis — no containers, no network.");
+    }
+    Ok(())
+}
+
+/// Build a `FinderContext` scoped to a single localhost port (used by the JWT
+/// benches). Profiles are empty — the JwtAuthFinder supplies its own tokens.
+fn jwt_finder_context(
+    base_url: &str,
+    port: u16,
+) -> Result<baloncore_core::active_finder::FinderContext> {
+    let runner = baloncore_core::web_api::HttpRequestRunner::with_max_body_excerpt(1024 * 1024)
+        .map_err(|e| anyhow::anyhow!("HttpRequestRunner: {e}"))?;
+    let scope = baloncore_core::scope::ScopeGuard::new(baloncore_core::config::ScopeConfig {
+        allow_urls: vec![format!("http://127.0.0.1:{port}/")],
+        allow_hosts: vec!["127.0.0.1".to_string(), "localhost".to_string()],
+        deny_hosts: vec![],
+        max_depth: 2,
+    })
+    .map_err(|e| anyhow::anyhow!("scope guard: {e}"))?;
+    Ok(baloncore_core::active_finder::FinderContext::new(
+        base_url.to_string(),
+        vec![],
+        runner,
+        scope,
+        baloncore_core::active_finder::ProbeBudget::conservative(),
+    ))
+}
+
+/// Run one `JwtAuthCase` through the `JwtAuthFinder` and return (verified, detail).
+fn run_jwt_case(
+    base_url: &str,
+    port: u16,
+    case: baloncore_core::JwtAuthCase,
+) -> Result<(bool, String)> {
+    use baloncore_core::active_finder::{ActiveFinder, FinderDecision};
+    let mut ctx = jwt_finder_context(base_url, port)?;
+    let finder = baloncore_core::JwtAuthFinder::new(case);
+    let decision = finder.probe(&mut ctx);
+    let detail = match &decision {
+        FinderDecision::Verified(p) => format!("VERIFIED: {}", p.detail),
+        FinderDecision::Rejected(r) => format!("rejected: {} {:?}", r.reason, r.observations),
+        FinderDecision::Inconclusive(s) => format!("inconclusive: {s}"),
+    };
+    Ok((decision.is_verified(), detail))
+}
+
+fn bench_jwt_dvga(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    image: String,
+    host_port: u16,
+    json: bool,
+) -> Result<()> {
+    use baloncore_core::active_finder::ProbeBudget;
+    use baloncore_core::jwt_auth_finder::{ForgeTechnique, JwtAuthCase, TokenInjection};
+    use baloncore_core::web_api::HttpMethod;
+    use std::process::{Command, Stdio};
+    let _ = ProbeBudget::conservative;
+
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-jwt-dvga: ground-truth {} not found",
+            ground_truth_path.display()
+        );
+    }
+    let needs_human = |what: &str| {
+        anyhow::anyhow!(
+            "bench-jwt-dvga: {what}. Run `scripts/fetch_dvga.sh` (Docker pull) and ensure Docker \
+             is running, then re-run. NEEDS-HUMAN by design."
+        )
+    };
+    if Command::new("docker")
+        .arg("info")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human("Docker is not available"));
+    }
+    if Command::new("docker")
+        .args(["image", "inspect", &image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return Err(needs_human(&format!(
+            "DVGA image {image} not present locally"
+        )));
+    }
+
+    let gt = baloncore_core::JwtGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::jwt_suite(&gt);
+
+    let container = format!("baloncore-jwt-dvga-{}", std::process::id());
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &container])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            &container,
+            "-p",
+            &format!("127.0.0.1:{host_port}:5013"),
+            "-e",
+            "WEB_HOST=0.0.0.0",
+            &image,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("docker run DVGA")?;
+    if !status.success() {
+        bail!("bench-jwt-dvga: docker run failed");
+    }
+    struct CGuard(String);
+    impl Drop for CGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", &self.0])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+    let _g = CGuard(container.clone());
+
+    let base_url = format!("http://127.0.0.1:{host_port}");
+    let graphql_url = format!("{base_url}/graphql");
+    let runner =
+        baloncore_core::web_api::HttpRequestRunner::new().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let started = std::time::Instant::now();
+    let mut ready = false;
+    while started.elapsed() < std::time::Duration::from_secs(30) {
+        if let Ok(ex) = runner.send(&get_spec("dvga-home", "anonymous", &base_url)) {
+            if (200..500).contains(&ex.status) {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    if !ready {
+        bail!("bench-jwt-dvga: DVGA not ready on {base_url} within 30s");
+    }
+
+    // Control identity for DVGA: a forged non-privileged identity (DVGA does not
+    // verify signatures, so this is the attacker's own operator-level access).
+    let operator_control =
+        baloncore_core::forge_alg_none(&serde_json::json!({ "identity": "operator" }));
+    let dvga_headers = vec![("X-DVGA-MODE".to_string(), "Beginner".to_string())];
+
+    let mut verified = std::collections::BTreeMap::new();
+    // vuln-forge-admin-identity
+    let vuln_case = JwtAuthCase {
+        label: "vuln-forge-admin-identity".to_string(),
+        url: graphql_url.clone(),
+        method: HttpMethod::Post,
+        injection: TokenInjection::GraphQlArg {
+            query_template: "{ me(token:\"{TOKEN}\") { id username password } }".to_string(),
+            extra_headers: dvga_headers.clone(),
+        },
+        control_token: Some(operator_control.clone()),
+        escalate_key: "identity".to_string(),
+        escalate_value: "admin".to_string(),
+        extra_claims: serde_json::json!({}),
+        techniques: vec![
+            ForgeTechnique::AlgNone,
+            ForgeTechnique::StripSignature,
+            ForgeTechnique::ClaimTamper,
+        ],
+        weak_secret_wordlist: vec![],
+        rs256_public_key: None,
+        victim_markers: vec!["changeme".to_string()],
+    };
+    let (v, d) = run_jwt_case(&base_url, host_port, vuln_case)?;
+    eprintln!("[bench-jwt-dvga] vuln-forge-admin-identity: {d}");
+    verified.insert("vuln-forge-admin-identity".to_string(), v);
+
+    // decoy-public-paste (no {TOKEN}: token irrelevant; public content)
+    let decoy_case = JwtAuthCase {
+        label: "decoy-public-paste".to_string(),
+        url: graphql_url.clone(),
+        method: HttpMethod::Post,
+        injection: TokenInjection::GraphQlArg {
+            query_template: "{ paste(id:12) { id title content } }".to_string(),
+            extra_headers: dvga_headers.clone(),
+        },
+        control_token: Some(operator_control),
+        escalate_key: "identity".to_string(),
+        escalate_value: "admin".to_string(),
+        extra_claims: serde_json::json!({}),
+        techniques: vec![ForgeTechnique::AlgNone],
+        weak_secret_wordlist: vec![],
+        rs256_public_key: None,
+        victim_markers: vec!["Mind your own business".to_string()],
+    };
+    let (v, d) = run_jwt_case(&base_url, host_port, decoy_case)?;
+    eprintln!("[bench-jwt-dvga] decoy-public-paste: {d}");
+    verified.insert("decoy-public-paste".to_string(), v);
+
+    let run = baloncore_core::score_jwt_run(&verified, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nBenchmarkRun: {}", run_results_output.display());
+        println!("DVGA container torn down automatically.");
+    }
+    Ok(())
+}
+
+fn bench_jwt_vampi(
+    run_results_output: PathBuf,
+    scorecard_output: PathBuf,
+    ground_truth_path: PathBuf,
+    vampi_dir: PathBuf,
+    lab_port: u16,
+    json: bool,
+) -> Result<()> {
+    use baloncore_core::jwt_auth_finder::{ForgeTechnique, JwtAuthCase, TokenInjection};
+    use baloncore_core::web_api::HttpMethod;
+    use std::process::{Command, Stdio};
+
+    if !ground_truth_path.exists() {
+        bail!(
+            "bench-jwt-vampi: ground-truth {} not found",
+            ground_truth_path.display()
+        );
+    }
+    if !vampi_dir.join(".venv/bin/python").exists() {
+        return Err(anyhow::anyhow!(
+            "bench-jwt-vampi: VAmPI venv not found at {}. Run `scripts/fetch_vampi.sh` first \
+             (network + pip). NEEDS-HUMAN by design.",
+            vampi_dir.join(".venv/bin/python").display()
+        ));
+    }
+    let vampi_dir = std::fs::canonicalize(&vampi_dir).with_context(|| "canonicalize vampi dir")?;
+    let venv_python = vampi_dir.join(".venv/bin/python");
+
+    let gt = baloncore_core::JwtGroundTruth::load_from(&ground_truth_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let suite = baloncore_core::jwt_suite(&gt);
+
+    // Boot the vulnerable VAmPI instance.
+    let bootstrap = format!(
+        "from config import vuln_app; vuln_app.run(host='127.0.0.1', port={lab_port}, debug=False)"
+    );
+    let child = Command::new(&venv_python)
+        .arg("-c")
+        .arg(&bootstrap)
+        .current_dir(&vampi_dir)
+        .env("vulnerable", "1")
+        .env("tokentimetolive", "600")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| "spawn VAmPI")?;
+    struct PGuard(std::process::Child);
+    impl Drop for PGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _g = PGuard(child);
+
+    let base_url = format!("http://127.0.0.1:{lab_port}");
+    let runner =
+        baloncore_core::web_api::HttpRequestRunner::new().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let started = std::time::Instant::now();
+    let mut ready = false;
+    while started.elapsed() < std::time::Duration::from_secs(20) {
+        if let Ok(ex) = runner.send(&get_spec("home", "anonymous", &base_url)) {
+            if (200..300).contains(&ex.status) {
+                ready = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    if !ready {
+        bail!("bench-jwt-vampi: VAmPI not ready on {base_url} within 20s");
+    }
+    // Populate seed users (name1/name2/admin).
+    let _ = runner.send(&get_spec(
+        "createdb",
+        "anonymous",
+        &format!("{base_url}/createdb"),
+    ));
+
+    // Control token: log in name2 (a real, non-admin identity).
+    let login_body = serde_json::json!({ "username": "name2", "password": "pass2" });
+    let login_ex = runner
+        .send_with_json_body(
+            &post_spec(
+                "login-name2",
+                "name2",
+                &format!("{base_url}/users/v1/login"),
+            ),
+            Some(&login_body),
+        )
+        .with_context(|| "login name2")?;
+    let control_token = serde_json::from_str::<serde_json::Value>(&login_ex.response_body_excerpt)
+        .ok()
+        .and_then(|v| {
+            v.get("auth_token")
+                .and_then(|t| t.as_str())
+                .map(String::from)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "bench-jwt-vampi: could not log in name2 (body {})",
+                login_ex.response_body_excerpt
+            )
+        })?;
+
+    let now = unix_seconds() as i64;
+    let exp_claims = serde_json::json!({ "iat": now, "exp": now + 3600 });
+    let wordlist: Vec<String> = [
+        "secret", "password", "key", "jwt", "admin", "changeme", "123456", "random", "vampi",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+
+    let mut verified = std::collections::BTreeMap::new();
+
+    // vuln-weak-secret-hmac-admin
+    let vuln = JwtAuthCase {
+        label: "vuln-weak-secret-hmac-admin".to_string(),
+        url: format!("{base_url}/me"),
+        method: HttpMethod::Get,
+        injection: TokenInjection::BearerHeader,
+        control_token: Some(control_token.clone()),
+        escalate_key: "sub".to_string(),
+        escalate_value: "admin".to_string(),
+        extra_claims: exp_claims.clone(),
+        techniques: vec![ForgeTechnique::WeakSecretHmac],
+        weak_secret_wordlist: wordlist.clone(),
+        rs256_public_key: None,
+        victim_markers: vec!["admin@mail.com".to_string()],
+    };
+    let (v, d) = run_jwt_case(&base_url, lab_port, vuln)?;
+    eprintln!("[bench-jwt-vampi] vuln-weak-secret-hmac-admin: {d}");
+    verified.insert("vuln-weak-secret-hmac-admin".to_string(), v);
+
+    // decoy-algnone-rejected
+    let decoy_alg = JwtAuthCase {
+        label: "decoy-algnone-rejected".to_string(),
+        url: format!("{base_url}/me"),
+        method: HttpMethod::Get,
+        injection: TokenInjection::BearerHeader,
+        control_token: Some(control_token.clone()),
+        escalate_key: "sub".to_string(),
+        escalate_value: "admin".to_string(),
+        extra_claims: exp_claims.clone(),
+        techniques: vec![ForgeTechnique::AlgNone],
+        weak_secret_wordlist: vec![],
+        rs256_public_key: None,
+        victim_markers: vec!["admin@mail.com".to_string()],
+    };
+    let (v, d) = run_jwt_case(&base_url, lab_port, decoy_alg)?;
+    eprintln!("[bench-jwt-vampi] decoy-algnone-rejected: {d}");
+    verified.insert("decoy-algnone-rejected".to_string(), v);
+
+    // decoy-public-users
+    let decoy_pub = JwtAuthCase {
+        label: "decoy-public-users".to_string(),
+        url: format!("{base_url}/users/v1"),
+        method: HttpMethod::Get,
+        injection: TokenInjection::BearerHeader,
+        control_token: Some(control_token),
+        escalate_key: "sub".to_string(),
+        escalate_value: "admin".to_string(),
+        extra_claims: exp_claims,
+        techniques: vec![ForgeTechnique::AlgNone, ForgeTechnique::WeakSecretHmac],
+        weak_secret_wordlist: wordlist,
+        rs256_public_key: None,
+        victim_markers: vec!["admin@mail.com".to_string()],
+    };
+    let (v, d) = run_jwt_case(&base_url, lab_port, decoy_pub)?;
+    eprintln!("[bench-jwt-vampi] decoy-public-users: {d}");
+    verified.insert("decoy-public-users".to_string(), v);
+
+    let run = baloncore_core::score_jwt_run(&verified, &gt, &suite);
+    let scorecard = baloncore_core::generate_scorecard(&suite, &run, None, None);
+    ensure_parent_dir(&run_results_output)?;
+    ensure_parent_dir(&scorecard_output)?;
+    baloncore_core::save_benchmark_run(&run, &run_results_output)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    baloncore_core::save_scorecard(&scorecard, &scorecard_output)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&scorecard)?);
+    } else {
+        println!("{}", baloncore_core::render_scorecard(&scorecard));
+        println!("\nBenchmarkRun: {}", run_results_output.display());
+        println!("VAmPI instance torn down automatically.");
+    }
     Ok(())
 }
 
